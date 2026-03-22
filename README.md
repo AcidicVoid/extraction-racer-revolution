@@ -63,6 +63,7 @@ You should test your game files using this md5 hash table. Checking `SLUS_002.14
 | RR.VB        | `aef8667db6d27aa4fdfe6faf49252a9f` |
 | RR.VH        | `6a95c27af524d1b9c6c7db164925da84` |
 | TANGO.SEQ    | `71b62826cba59341d086c3597246da01` |
+
 When using Windows you can easily list the md5 hashes of your files:  
 `for %i in (*.*) do certutil -hashfile %i md5`  
 You can also check via redump: http://redump.org/disc/2731/
