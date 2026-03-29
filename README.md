@@ -381,9 +381,9 @@ requirements.txt
 If you'd like to support me feel free to toss me some eddies, Choom.  
 Thanks for considering! 
 
-|     |                                              |
-|-----|----------------------------------------------|
-| BTC | `bc1qu29uqhp2rg7845n4wy6fhax0fgp4eajadxp45z` |
-| ETH | `bc1qu29uqhp2rg7845n4wy6fhax0fgp4eajadxp45z` |
-| BTC | `bc1qu29uqhp2rg7845n4wy6fhax0fgp4eajadxp45z` |
-| PP  | `paypal.me/centralvortex`                    |
+|     |                                                |
+|-----|------------------------------------------------|
+| BTC | `bc1qu29uqhp2rg7845n4wy6fhax0fgp4eajadxp45z`   |
+| ETH | `0xCAE2f86E4658b3FC0E753A2143E5dCC09Edff694`   |
+| BTC | `25ePWvR1e8LxeJpz2E2LDB3gUjtCC1dtEg5umSWjAtTV` |
+| PP  | `paypal.me/AcidicVoid`                         |
