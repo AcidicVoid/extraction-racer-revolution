@@ -2,54 +2,67 @@
 #
 # Each course file has six sections, pointed to by six u32 offsets at byte 0:
 #
-#   Section 0  Road display lists (147 segments, one per occupied tile).
+#   Section 0  Road display lists (147 segments, streaming cache).
 #   Section 1  Track-local object library (122 entries, display list format).
 #   Section 2  Course texture upload: 384 halfwords wide x 256 rows,
 #              placed into VRAM at (640, 256).
 #   Section 3  Alternate texture upload (double-buffered companion to sec 2).
 #   Section 4  Object placement table (stride 20 bytes per record).
-#   Section 5  Sub-section pointer table (used internally by the game).
+#   Section 5  Sub-section pointer table with 25 entries.
+#              sub[20] = the road spine (264 nodes, stride 20 bytes).
 #
-# Tile grid (32x32 signed 16-bit values) starts at file offset 0x18.
-# Each cell stores a segment index (0..146) or -1 for empty.
-# Index formula:  gi = row * 32 + col   (simple row-major order, confirmed).
-# Tile world origin: (col * 2048, row * 2048) in world units.
+# --- ROAD SPINE (section 5, sub[20]) ---
 #
-# Road vertex coordinate system:
-#   Vertices in section-0 CMD0 records are in GTE units.
-#   World position = vertex_value / GTE_SCALE + tile_origin
-#   GTE_SCALE = 4  (confirmed: raw X range ~+-11000 / 4 + tile = world values
-#                   that align with section-4 placement coords)
+# The spine defines the road centerline as a closed loop of 264 nodes.
+# Each node is 20 bytes (confirmed from RIDGE.EXE decompile FUN_80038314):
 #
-# Section-0 CMD types:
-#   CMD0 (40B) - close-up road surface -> extract
-#   CMD1 (48B) - road surface (same vertex layout as CMD0, 8 extra bytes).
-#               Two sub-types based on vertex magnitude:
-#                 near-field  (max abs component < 32000) -> extract
-#                 horizon     (any component == +-32767)  -> skip
-#               39 tiles have ONLY CMD1, so skipping all CMD1 leaves those
-#               tiles empty and breaks road continuity.
-#   CMD2 (32B) - colored kerb strips -> skip
+#   [0..3]   s32  f0:  world X = 0xF000 - (f0 >> 14)
+#   [4..7]   s32  f1:  world Z = f1 >> 14
+#   [8..9]   s16  wy:  world Y (elevation, world units)
+#   [10..11] s16  heading: PS1 angle (4096 = 360 deg), road direction
+#   [12..13] s16  f4:  small width deviation (-11..12)
+#   [14..15] s16  f5:  road half-width (world units / 4)
+#   [16..19]       reserved / flags
 #
-# Sentinel threshold: PS1 uses raw s16 value +-32767 as a sky/horizon marker.
-# Any CMD1 record with a vertex component >= this value is a horizon poly.
-CMD1_HORIZON_THRESHOLD = 32000
+# Road ribbon half-width = f5 / 4 world units (typical: 3504/4 = 876).
+# The road is closed: node 263 connects back to node 0.
 #
-# Section-4 placement record (20 bytes, little-endian):
+# The spine is the authoritative source for road geometry.
+# Section-0 display lists are streaming cache segments (one per camera tile),
+# each covering a large overlapping area around its tile position.
+# They are NOT directly usable as world-space geometry tiles.
+#
+# --- TILE GRID (at file offset 0x18) ---
+#
+# 32x32 signed 16-bit values, each is a section-0 segment index (or -1).
+# Grid index formula (from RIDGE.EXE decompile FUN_80042f7c):
+#   gi = (tile_row * 32 + 30) - tile_col
+# Tile world origin: tile_col = 30 - (gi % 32), tile_row = gi // 32.
+# Used by the game to pick which display list to stream near the camera.
+#
+# --- OBJECT PLACEMENTS (section 4) ---
+#
+# 20-byte records:
 #   [0..1]   u16  section-1 entry index
-#   [2..3]   u16  Y-axis rotation angle (PS1 units: 4096 = 360 degrees)
+#   [2..3]   u16  Y-axis rotation angle (4096 = 360 deg)
 #   [4..7]   s32  world X
 #   [8..11]  s32  world Y
 #   [12..15] s32  world Z
-#   [16..19] s32  flags / extra (meaning not fully known)
-# Records where (world_X == 0 and world_Z == 0) or entry_index >= s1_count
-# are sentinels and must be skipped.
+#   [16..19] s32  flags (meaning unknown)
+# Sentinel: entry_index >= s1_count OR (world_X == 0 AND world_Z == 0).
 #
-# *_PCT.DAT / *_CT.DAT files contain CLUT upload records:
-#   Repeating: [u32 size][u16 vram_x][u16 vram_y][u16 w][u16 h][data]
-#   Terminated by size == 0.
-# Load order per course:  PCT first, then CT (last write wins in VRAM).
-# CLUT map:
+# Object vertex placement (section-1 vertices are in GTE units, divide by 4):
+#   rotated_X, rotated_Z = rotate_y(vertex_X, vertex_Z, angle)
+#   world_X = rotated_X / 4 + placement_X
+#   world_Y = vertex_Y   / 4 + placement_Y
+#   world_Z = rotated_Z  / 4 + placement_Z
+#
+# --- *_PCT.DAT / *_CT.DAT - Course CLUT Banks ---
+#
+# Sequence of upload records, terminated by size == 0:
+#   [u32 size][u16 vram_x][u16 vram_y][u16 w][u16 h][raw ABGR1555 data]
+#
+# Load order per course (PCT first, CT last -- last write wins):
 #   CRS_EASY  -> EASY_PCT.DAT, EASY_CT.DAT
 #   CRS_MID   -> MID_PCT.DAT
 #   CRS_HIGH  -> HIGH_PCT.DAT
@@ -60,10 +73,9 @@ import struct
 import math
 from rrr.displaylist import parse_display_list, Poly, _decode_tpage, _decode_clut
 
-GTE_SCALE = 4          # GTE units per world unit for road/object vertices
-TILE_SIZE = 2048       # world units per tile edge
-GRID_COLS = 32
-GRID_ROWS = 32
+GTE_SCALE = 4      # GTE units per world unit (for object vertices)
+GRID_SIZE = 32
+F0_FLOOR  = 0xF000 # constant from RIDGE.EXE (DAT_801dc9b0 = 61440)
 
 CLUT_FILES = {
     'CRS_EASY': ['EASY_PCT.DAT', 'EASY_CT.DAT'],
@@ -74,40 +86,46 @@ CLUT_FILES = {
 }
 
 
-def _sin(angle: int) -> float:
-    """PS1 angle to sin.  4096 units = 360 degrees."""
+def _sin(angle):
+    """PS1 angle to sin. 4096 units = 360 degrees."""
     return math.sin(angle * math.pi / 2048)
 
 
-def _cos(angle: int) -> float:
+def _cos(angle):
     return math.cos(angle * math.pi / 2048)
 
 
-def _rotate_y(x: float, z: float, angle: int) -> tuple:
-    """Rotate a (x, z) pair by a PS1 angle around the Y axis."""
+def _rotate_y(x, z, angle):
+    """Rotate a (x, z) pair around Y by a PS1 angle."""
     s, c = _sin(angle), _cos(angle)
     return x * c + z * s, -x * s + z * c
 
 
-def load_course_textures(crs_data: bytes, vram, clut_files: list = None):
+def _normalize2(dx, dz):
+    mag = math.sqrt(dx * dx + dz * dz)
+    if mag < 0.001:
+        return 1.0, 0.0
+    return dx / mag, dz / mag
+
+
+def load_course_textures(crs_data, vram, clut_files=None):
     """
     Upload course-specific textures into an existing VramSim.
 
-    Section 2 of the CRS file contains 384x256 halfwords of raw VRAM data
-    placed at VRAM (640, 256).  The CLUT files are loaded on top of that.
+    Section 2 contains 384x256 halfwords of raw VRAM data placed at (640, 256).
+    Each CLUT file is a sequence of upload records loaded on top.
     """
     sec = struct.unpack_from('<6I', crs_data, 0)
     sec2 = crs_data[sec[2]: sec[3]]
     expected = 384 * 256 * 2
     if len(sec2) == expected:
         vram.load_rect(640, 256, 384, 256, sec2)
-        print('  course textures: 384x256 block -> VRAM(640,256)')
+        print('  course textures: 384x256 -> VRAM(640,256)')
     else:
-        print(f'  course textures: unexpected section-2 size {len(sec2)} (expected {expected})')
+        print(f'  course textures: unexpected size {len(sec2)} (expected {expected})')
 
     for clut_data in (clut_files or []):
-        pos = 0
-        count = 0
+        pos = 0; count = 0
         while pos + 12 <= len(clut_data):
             sz = struct.unpack_from('<I', clut_data, pos)[0]
             if sz == 0 or sz > 10_000_000:
@@ -124,98 +142,105 @@ def load_course_textures(crs_data: bytes, vram, clut_files: list = None):
             print(f'  CLUT file: {count} records loaded')
 
 
-def parse_crs(data: bytes) -> tuple:
+def _read_spine(crs_data):
+    """
+    Parse the road spine from section-5 sub[20].
+
+    Returns a list of dicts with keys:
+        wx, wy, wz  -- world X/Y/Z position
+        heading     -- PS1 angle (4096 = 360 deg)
+        hw          -- road half-width in world units (f5 / 4)
+    """
+    sec = struct.unpack_from('<6I', crs_data, 0)
+    s5_off = sec[5]
+    sub20_rel = struct.unpack_from('<I', crs_data, s5_off + 20 * 4)[0]
+    spine_abs = s5_off + sub20_rel
+    count = struct.unpack_from('<I', crs_data, spine_abs)[0]
+
+    nodes = []
+    for i in range(count):
+        off = spine_abs + 4 + i * 20
+        f0 = struct.unpack_from('<i', crs_data, off)[0]
+        f1 = struct.unpack_from('<i', crs_data, off + 4)[0]
+        wy = struct.unpack_from('<h', crs_data, off + 8)[0]
+        heading = struct.unpack_from('<h', crs_data, off + 10)[0]
+        f5 = struct.unpack_from('<h', crs_data, off + 14)[0]
+        if f0 < 0: f0 += 0x3FFF
+        if f1 < 0: f1 += 0x3FFF
+        nodes.append({
+            'wx': F0_FLOOR - (f0 >> 14),
+            'wy': wy,
+            'wz': f1 >> 14,
+            'heading': heading,
+            'hw': f5 // GTE_SCALE,   # convert from GTE units to world units
+        })
+    return nodes
+
+
+def _build_road_polys(spine):
+    """
+    Build road ribbon quads from the spine centerline.
+
+    Each pair of consecutive spine nodes becomes one quad spanning the road
+    width. The perpendicular direction is derived from the tangent between
+    adjacent nodes, so the ribbon follows the road smoothly.
+
+    Returns a list of Poly objects (no texture -- just geometry).
+    """
+    n = len(spine)
+    polys = []
+
+    def tangent(i):
+        a = spine[(i - 1) % n]
+        b = spine[(i + 1) % n]
+        return _normalize2(b['wx'] - a['wx'], b['wz'] - a['wz'])
+
+    for i in range(n):
+        j = (i + 1) % n
+        a = spine[i]
+        b = spine[j]
+        # Perpendicular at each node (road width direction)
+        tax, taz = tangent(i)
+        tbx, tbz = tangent(j)
+        pax, paz = -taz, tax
+        pbx, pbz = -tbz, tbx
+        hw_a = max(a['hw'], 100)   # minimum reasonable width
+        hw_b = max(b['hw'], 100)
+
+        # Four corners of the road quad
+        al = (a['wx'] + hw_a * pax, a['wy'], a['wz'] + hw_a * paz)
+        ar = (a['wx'] - hw_a * pax, a['wy'], a['wz'] - hw_a * paz)
+        bl = (b['wx'] + hw_b * pbx, b['wy'], b['wz'] + hw_b * pbz)
+        br = (b['wx'] - hw_b * pbx, b['wy'], b['wz'] - hw_b * pbz)
+
+        polys.append(Poly(
+            [al, ar, bl, br],
+            [(0, 0)] * 4,
+            has_tex=False,
+            color=(80, 80, 80),
+        ))
+    return polys
+
+
+def parse_crs(data):
     """
     Parse a CRS_*.DAT file.
 
     Returns:
-        road_polys      - list of Poly for the road surface (section-0 CMD0).
+        road_polys       - list of Poly for the road surface (spine ribbon).
         named_placements - list of (name, [Poly]) for placed objects (section-4).
     """
     sec = struct.unpack_from('<6I', data, 0)
-    s0_off = sec[0]
     s1_off = sec[1]
     s4_off = sec[4]
     s4_end = sec[5]
 
-    # --- road geometry (section 0) ---
-    s0_n = struct.unpack_from('<I', data, s0_off)[0]
-    s0_offsets = [struct.unpack_from('<I', data, s0_off + 4 + i * 4)[0]
-                  for i in range(s0_n)]
+    # Road centerline ribbon from spine
+    spine = _read_spine(data)
+    road_polys = _build_road_polys(spine)
+    print(f'  road spine: {len(spine)} nodes -> {len(road_polys)} ribbon quads')
 
-    road_polys = []
-    for row in range(GRID_ROWS):
-        for col in range(GRID_COLS):
-            gi = row * GRID_COLS + col
-            seg_idx = struct.unpack_from('<h', data, 0x18 + gi * 2)[0]
-            if seg_idx < 0 or seg_idx >= s0_n:
-                continue
-
-            tile_wx = col * TILE_SIZE
-            tile_wz = row * TILE_SIZE
-
-            seg_start = s0_off + s0_offsets[seg_idx]
-            seg_end = s0_off + (s0_offsets[seg_idx + 1]
-                                if seg_idx + 1 < s0_n
-                                else s1_off - s0_off)
-            sd = data[seg_start: min(seg_end, len(data))]
-
-            pos = 0
-            while pos + 4 <= len(sd):
-                cmd = struct.unpack_from('<H', sd, pos)[0]
-                cnt = struct.unpack_from('<H', sd, pos + 2)[0]
-                if cnt == 0:
-                    break
-                if cmd == 2:    # colored kerb strip - skip
-                    pos += 4 + cnt * 32
-                    continue
-                if cmd not in (0, 1):
-                    break       # unexpected command, stop this segment
-
-                stride = 40 if cmd == 0 else 48
-                for pi in range(cnt):
-                    rec = sd[pos + 4 + pi * stride: pos + 4 + (pi + 1) * stride]
-                    if len(rec) < stride:
-                        break
-
-                    xs = [struct.unpack_from('<h', rec, j * 4)[0]      for j in range(4)]
-                    ys = [struct.unpack_from('<h', rec, j * 4 + 2)[0]  for j in range(4)]
-                    zs = [struct.unpack_from('<h', rec, 16 + j * 2)[0] for j in range(4)]
-
-                    # CMD1 horizon sentinel: any component at PS1 s16 max means
-                    # this is a sky/far-field poly, not road surface.
-                    if cmd == 1:
-                        if any(abs(v) >= CMD1_HORIZON_THRESHOLD
-                               for v in xs + zs):
-                            continue
-
-                    verts = [
-                        (xs[j] // GTE_SCALE + tile_wx,
-                         ys[j] // GTE_SCALE,
-                         zs[j] // GTE_SCALE + tile_wz)
-                        for j in range(4)
-                    ]
-
-                    w24 = struct.unpack_from('<I', rec, 24)[0]
-                    w28 = struct.unpack_from('<I', rec, 28)[0]
-                    u0, v0 = w24 & 0xFF, (w24 >> 8) & 0xFF
-                    clut_word  = (w24 >> 16) & 0xFFFF
-                    u1, v1 = w28 & 0xFF, (w28 >> 8) & 0xFF
-                    tpage_word = (w28 >> 16) & 0xFFFF
-                    u2, v2 = rec[32], rec[33]
-                    u3, v3 = rec[36], rec[37]
-
-                    tx, ty, tp = _decode_tpage(tpage_word)
-                    cx, cy    = _decode_clut(clut_word)
-                    road_polys.append(Poly(
-                        verts, [(u0, v0), (u1, v1), (u2, v2), (u3, v3)],
-                        tx, ty, cx, cy, tp, True))
-
-                pos += 4 + cnt * stride
-
-    print(f'  road: {len(road_polys)} quads from {s0_n} segments')
-
-    # --- object library (section 1) ---
+    # Object library (section 1)
     s1_n = struct.unpack_from('<I', data, s1_off)[0]
     s1_offsets = [struct.unpack_from('<I', data, s1_off + 4 + i * 4)[0]
                   for i in range(s1_n)]
@@ -225,7 +250,7 @@ def parse_crs(data: bytes) -> tuple:
         end = s1_off + (s1_offsets[i + 1] if i + 1 < s1_n else sec[2] - s1_off)
         obj_library.append(parse_display_list(data[start: min(end, len(data))]))
 
-    # --- object placements (section 4) ---
+    # Object placements (section 4)
     named_placements = []
     num_placements = (s4_end - s4_off) // 20
     for i in range(num_placements):
@@ -259,5 +284,5 @@ def parse_crs(data: bytes) -> tuple:
             named_placements.append((f'obj{i:03d}_s{midx:03d}', placed))
 
     total_obj_polys = sum(len(pl) for _, pl in named_placements)
-    print(f'  objects: {total_obj_polys} quads in {len(named_placements)} placements')
+    print(f'  objects: {total_obj_polys} polys in {len(named_placements)} placements')
     return road_polys, named_placements
