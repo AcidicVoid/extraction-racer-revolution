@@ -377,13 +377,26 @@ dump_obj.py       - debug geometry export (no textures, plain OBJ)
 requirements.txt
 ```
 
-# Support
-If you'd like to support me feel free to toss me some eddies, Choom.  
-Thanks for considering! 
+## Support
+Reverse engineering is a lot of work, even with some AI support for data analysis.  
+If you’d like to support me, feel free to toss me a coin for a tea or a burger.  
+Thanks a lot for considering!
 
-|     |                                                |
-|-----|------------------------------------------------|
-| BTC | `bc1qu29uqhp2rg7845n4wy6fhax0fgp4eajadxp45z`   |
-| ETH | `0xCAE2f86E4658b3FC0E753A2143E5dCC09Edff694`   |
-| BTC | `25ePWvR1e8LxeJpz2E2LDB3gUjtCC1dtEg5umSWjAtTV` |
-| PP  | `paypal.me/AcidicVoid`                         |
+#### PayPal
+[PayPal.me/AcidicVoid](https://www.paypal.me/AcidicVoid)
+
+#### Crypto
+<table>
+  <tr>
+    <td>BTC (BIP84)</td>
+    <td>bc1qu29uqhp2rg7845n4wy6fhax0fgp4eajadxp45z</td>
+  </tr>
+  <tr>
+    <td>ETH</td>
+    <td>0xCAE2f86E4658b3FC0E753A2143E5dCC09Edff694</td>
+  </tr>
+  <tr>
+    <td>BONK</td>
+    <td>25ePWvR1e8LxeJpz2E2LDB3gUjtCC1dtEg5umSWjAtTV</td>
+  </tr>
+</table>
