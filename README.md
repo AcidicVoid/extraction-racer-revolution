@@ -382,8 +382,8 @@ Reverse engineering is a lot of work, even with some AI support for data analysi
 If you’d like to support me, feel free to toss me a coin for a tea or a burger.  
 Thanks a lot for considering!
 
-#### PayPal
-[PayPal.me/AcidicVoid](https://www.paypal.me/AcidicVoid)
+#### Patreon
+[Support me via Patreon](https://www.patreon.com/cw/AcidicVoid/membership)
 
 #### Crypto
 <table>
