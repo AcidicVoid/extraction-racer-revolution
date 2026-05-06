@@ -19,8 +19,9 @@ def _cos(a): return math.cos(a * math.pi / 2048)
 
 
 def _rotate_y(x, z, angle):
+    # Matrix from RIDGE.EXE FUN_800527dc: new_x = cos*x - sin*z, new_z = sin*x + cos*z
     s, c = _sin(angle), _cos(angle)
-    return x * c + z * s, -x * s + z * c
+    return x * c - z * s, x * s + z * c
 
 
 def _normalize2(dx, dz):

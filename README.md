@@ -336,27 +336,20 @@ Sequence of upload records, terminated by a size-0 record.
 
 ## Known Limitations
 
-- **Race Track Extraction** is currently broken and does not work properly. 
-Fixing this is the current priority.
-
-- **Road mesh coverage.** Both CMD0 and CMD1 near-field quads are extracted
-  (3008 quads total for CRS_EASY). CMD1 records where any vertex component
-  reaches +-32767 (the PS1 s16 sentinel value) are treated as horizon/sky
-  polys and skipped. Some surface gaps may still exist between tiles.
-
 - **No texture stitching.** Each (TPAGE, CLUT) pair becomes a separate GLB
   material with a small cropped atlas. This is visually correct but results
   in many materials per mesh.
-
-- **Section-5 sub-pointers not decoded.** The game uses these for additional
-  streaming and road-spine data. The road spine (sub-pointer 20) was partially
-  analyzed but not used in the current exporter.
 
 - **Section-3 (alternate texture) not loaded.** Only section-2 is used.
   Streaming behavior between sections 2 and 3 is not fully understood.
 
 - **Section-4 flags field unknown.** The last 4 bytes of each placement
   record have unknown meaning and are ignored.
+
+- **Road surface is a spine ribbon, not the textured road mesh.** Section-0
+  contains pre-processed GPU packet display lists rendered via a PS1 hardware
+  tile-streaming path (confirmed by RIDGE.EXE decompile). Extracting this
+  correctly is a future task.
 
 ---
 

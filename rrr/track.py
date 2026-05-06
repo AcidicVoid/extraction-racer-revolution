@@ -96,9 +96,16 @@ def _cos(angle):
 
 
 def _rotate_y(x, z, angle):
-    """Rotate a (x, z) pair around Y by a PS1 angle."""
+    """Rotate a (x, z) pair around Y by a PS1 angle.
+
+    Matrix confirmed from RIDGE.EXE FUN_800527dc (Y-rotation builder):
+        [ cos   0  -sin ]
+        [  0    1    0  ]
+        [ sin   0   cos ]
+    Applied to column vector: new_x = cos*x - sin*z,  new_z = sin*x + cos*z
+    """
     s, c = _sin(angle), _cos(angle)
-    return x * c + z * s, -x * s + z * c
+    return x * c - z * s, x * s + z * c
 
 
 def _normalize2(dx, dz):

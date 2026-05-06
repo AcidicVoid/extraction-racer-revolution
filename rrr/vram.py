@@ -27,11 +27,22 @@ class VramSim:
         return (y * VRAM_WIDTH + x) * 2
 
     def load_rect(self, x: int, y: int, w: int, h: int, data: bytes):
-        """Copy a rectangle of raw halfword data into VRAM at (x, y)."""
+        """Copy a rectangle of raw halfword data into VRAM at (x, y).
+
+        The PCT/CT record 'size' field includes the 12-byte record header, so
+        the actual payload is (size - 12) bytes, which can be up to 12 bytes
+        shorter than w*h*2.  Python bytearray slice-assignment with a shorter
+        source silently shrinks the array, corrupting every subsequent VRAM
+        offset.  We therefore copy row-by-row and zero-pad any short row.
+        """
+        row_bytes = w * 2
         for row in range(h):
-            src = row * w * 2
+            src_off = row * row_bytes
+            chunk = data[src_off: src_off + row_bytes]
+            if len(chunk) < row_bytes:
+                chunk = chunk + bytes(row_bytes - len(chunk))
             dst = self._offset(x, y + row)
-            self.mem[dst: dst + w * 2] = data[src: src + w * 2]
+            self.mem[dst: dst + row_bytes] = chunk
 
     # -- higher-level loaders -----------------------------------------------
 
