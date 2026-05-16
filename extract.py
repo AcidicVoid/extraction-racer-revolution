@@ -158,13 +158,12 @@ def extract(game_dir: str, out_dir: str):
                 print(f'  [skip] {cname} not found')
         load_course_textures(crs_data, vram, clut_data_list)
 
-        road_polys, named_placements = parse_crs(crs_data)
-        node_list = [('road', road_polys)] + named_placements
+        road_nodes, named_placements = parse_crs(crs_data)
+        node_list = road_nodes + named_placements
         if any(polys for _, polys in node_list):
             export_glb(node_list, vram,
                        str(out / 'tracks' / f'{crs_path.stem.lower()}.glb'),
-                       scale=1 / 256.0,
-                       road_opaque=True)
+                       scale=1 / 256.0)
 
     print(f'\n=== Done. Output: {out} ===')
 
