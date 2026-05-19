@@ -104,21 +104,26 @@ def _rotate_y(x, z, angle):
     return x * c - z * s, x * s + z * c
 
 
-def load_course_textures(crs_data, vram, clut_files=None):
+def load_course_textures(crs_data, vram, clut_files=None, section=2):
     """
     Upload course-specific textures into an existing VramSim.
 
-    Section 2 contains 384x256 halfwords of raw VRAM data placed at (640, 256).
-    Each CLUT file is a sequence of upload records loaded on top.
+    Section 2 (default) or 3 contains 384x256 halfwords of raw VRAM data
+    placed at (640, 256).  Each CLUT file is a sequence of upload records
+    loaded on top.  The *section* parameter selects which texture buffer
+    to use (2 = default, 3 = alternate / double-buffered companion).
     """
     sec = struct.unpack_from('<6I', crs_data, 0)
-    sec2 = crs_data[sec[2]: sec[3]]
-    expected = 384 * 256 * 2
-    if len(sec2) == expected:
-        vram.load_rect(640, 256, 384, 256, sec2)
-        print('  course textures: 384x256 -> VRAM(640,256)')
+    if section == 3:
+        raw = crs_data[sec[3]: sec[4]]
     else:
-        print(f'  course textures: unexpected size {len(sec2)} (expected {expected})')
+        raw = crs_data[sec[2]: sec[3]]
+    expected = 384 * 256 * 2
+    if len(raw) == expected:
+        vram.load_rect(640, 256, 384, 256, raw)
+        print(f'  course textures: section {section} 384x256 -> VRAM(640,256)')
+    else:
+        print(f'  course textures: unexpected size {len(raw)} (expected {expected})')
 
     for clut_data in (clut_files or []):
         pos = 0; count = 0

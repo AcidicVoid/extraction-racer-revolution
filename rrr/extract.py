@@ -5,6 +5,7 @@
 import sys
 from pathlib import Path
 
+
 from rrr.tms import parse_tms, render_block
 from rrr.vram import VramSim
 from rrr.car import (parse_car_rso, CAR_TABLE, ALL_CAR_INDICES,
@@ -156,26 +157,29 @@ def extract(game_dir: str, out_dir: str):
             else:
                 print(f'  [skip] {cname} not found')
 
-        road_nodes, named_placements = parse_crs(crs_data)
+        # Build two VRAM states: section 2 and section 3.
+        vram_s2 = VramSim()
+        vram_s2.mem[:] = base_vram
+        load_course_textures(crs_data, vram_s2, clut_data_list, section=2)
+
+        vram_s3 = VramSim()
+        vram_s3.mem[:] = base_vram
+        load_course_textures(crs_data, vram_s3, clut_data_list, section=3)
+
+        # Parse CRS with both VRAM states for per-node section selection.
+        road_nodes, named_placements, alt_node_names = parse_crs(
+            crs_data, vram_s2=vram_s2, vram_s3=vram_s3)
+
         node_list = road_nodes + named_placements
-        if not any(polys for _, polys in node_list):
-            continue
-
-        stem = crs_path.stem.lower()
-
-        # Export with section 2 textures.
-        vram.mem[:] = base_vram
-        load_course_textures(crs_data, vram, clut_data_list, section=2)
-        export_glb(node_list, vram,
-                   str(out / 'tracks' / f'{stem}_s2.glb'),
-                   scale=1 / 256.0)
-
-        # Export with section 3 textures.
-        vram.mem[:] = base_vram
-        load_course_textures(crs_data, vram, clut_data_list, section=3)
-        export_glb(node_list, vram,
-                   str(out / 'tracks' / f'{stem}_s3.glb'),
-                   scale=1 / 256.0)
+        if any(polys for _, polys in node_list):
+            stem = crs_path.stem.lower()
+            print(f'  vram routing: {len(alt_node_names)} nodes -> sec3, '
+                  f'{len(node_list) - len(alt_node_names)} nodes -> sec2')
+            export_glb(node_list, vram_s2,
+                       str(out / 'tracks' / f'{stem}.glb'),
+                       scale=1 / 256.0,
+                       vram_alt=vram_s3,
+                       alt_nodes=alt_node_names)
 
     print(f'\n=== Done. Output: {out} ===')
 
