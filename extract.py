@@ -9,7 +9,8 @@ from rrr.tms import parse_tms, render_block
 from rrr.vram import VramSim
 from rrr.car import (parse_car_rso, CAR_TABLE, ALL_CAR_INDICES,
                      ENTRY_LABEL, WHEEL_CARS)
-from rrr.track import parse_crs, load_course_textures, CLUT_FILES
+from rrr.track import parse_crs, load_course_textures, compute_section_map, CLUT_FILES
+from rrr.merge_glb import merge_glb
 from rrr.glb import export_glb, HAS_GLTF
 from rrr.displaylist import Poly
 
@@ -162,20 +163,39 @@ def extract(game_dir: str, out_dir: str):
             continue
 
         stem = crs_path.stem.lower()
+        track_dir = out / 'tracks'
 
-        # Export with section 2 textures.
-        vram.mem[:] = base_vram
-        load_course_textures(crs_data, vram, clut_data_list, section=2)
-        export_glb(node_list, vram,
-                   str(out / 'tracks' / f'{stem}_s2.glb'),
-                   scale=1 / 256.0)
+        # Compute per-node section assignment from spine data.
+        sec_map = compute_section_map(crs_data, road_nodes, named_placements)
 
-        # Export with section 3 textures.
-        vram.mem[:] = base_vram
-        load_course_textures(crs_data, vram, clut_data_list, section=3)
-        export_glb(node_list, vram,
-                   str(out / 'tracks' / f'{stem}_s3.glb'),
-                   scale=1 / 256.0)
+        # Split nodes into S2 and S3 groups.
+        s2_nodes = [(n, p) for n, p in node_list if sec_map.get(n, 3) == 2]
+        s3_nodes = [(n, p) for n, p in node_list if sec_map.get(n, 3) == 3]
+
+        s2_path = str(track_dir / f'{stem}_s2.glb')
+        s3_path = str(track_dir / f'{stem}_s3.glb')
+        merged_path = str(track_dir / f'{stem}.glb')
+
+        # Export S2 group with section 2 textures.
+        if s2_nodes:
+            vram.mem[:] = base_vram
+            load_course_textures(crs_data, vram, clut_data_list, section=2)
+            export_glb(s2_nodes, vram, s2_path, scale=1 / 256.0)
+
+        # Export S3 group with section 3 textures.
+        if s3_nodes:
+            vram.mem[:] = base_vram
+            load_course_textures(crs_data, vram, clut_data_list, section=3)
+            export_glb(s3_nodes, vram, s3_path, scale=1 / 256.0)
+
+        # Merge into a single GLB.
+        if s2_nodes and s3_nodes:
+            merge_glb(s2_path, s3_path, merged_path)
+            print(f'  merged -> {merged_path}')
+        elif s2_nodes:
+            Path(s2_path).rename(merged_path)
+        elif s3_nodes:
+            Path(s3_path).rename(merged_path)
 
     print(f'\n=== Done. Output: {out} ===')
 

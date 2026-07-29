@@ -108,15 +108,20 @@ def merge_glb(path_a: str, path_b: str, out_path: str):
         new_mt.alphaCutoff = mt.alphaCutoff
 
         if mt.pbrMetallicRoughness is not None:
-            pbr = dict(mt.pbrMetallicRoughness)
-            if 'baseColorTexture' in pbr and pbr['baseColorTexture'] is not None:
-                bct = dict(pbr['baseColorTexture'])
-                if 'index' in bct and bct['index'] is not None:
-                    bct['index'] = bct['index'] + n_tex
-                pbr['baseColorTexture'] = bct
-            if 'baseColorFactor' in pbr:
-                pbr['baseColorFactor'] = pbr['baseColorFactor']
-            new_mt.pbrMetallicRoughness = pbr
+            from pygltflib import PbrMetallicRoughness, TextureInfo
+            src = mt.pbrMetallicRoughness
+            new_pbr = PbrMetallicRoughness()
+            if src.baseColorFactor is not None:
+                new_pbr.baseColorFactor = src.baseColorFactor
+            new_pbr.metallicFactor = src.metallicFactor
+            new_pbr.roughnessFactor = src.roughnessFactor
+            if src.baseColorTexture is not None:
+                idx = src.baseColorTexture.index
+                new_bct = TextureInfo(index=idx + n_tex if idx is not None else None)
+                if src.baseColorTexture.texCoord is not None:
+                    new_bct.texCoord = src.baseColorTexture.texCoord
+                new_pbr.baseColorTexture = new_bct
+            new_mt.pbrMetallicRoughness = new_pbr
         mats.append(new_mt)
 
     # --- Merge meshes (offset B's accessor/material indices in primitives) ---
@@ -124,14 +129,13 @@ def merge_glb(path_a: str, path_b: str, out_path: str):
     for msh in (b.meshes or []):
         new_prims = []
         for p in (msh.primitives or []):
-            new_attrs = {}
-            for attr_name, acc_idx in (p.attributes.__dict__.items()
-                                        if hasattr(p.attributes, '__dict__')
-                                        else p.attributes.items()
-                                        if isinstance(p.attributes, dict)
-                                        else []):
-                if acc_idx is not None:
-                    new_attrs[attr_name] = acc_idx + n_acc
+            from pygltflib import Attributes
+            src_attrs = p.attributes
+            new_attrs = Attributes()
+            for attr_name in ['POSITION', 'NORMAL', 'TEXCOORD_0', 'COLOR_0']:
+                val = getattr(src_attrs, attr_name, None)
+                if val is not None:
+                    setattr(new_attrs, attr_name, val + n_acc)
             new_p = Primitive(
                 attributes=new_attrs,
                 indices=p.indices + n_acc if p.indices is not None else None,
