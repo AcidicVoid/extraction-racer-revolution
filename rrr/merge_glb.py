@@ -1,17 +1,16 @@
 # Merge two GLB files into a single GLB.
 #
-# Used to combine the section-2 and section-3 track exports.  Rather than
-# concatenating the two files and offsetting every index, this rebuilds the
-# output from scratch, which lets identical materials be shared.
+# Used to combine the two course texture variants of a track into one file.
 #
-# Materials are deduplicated by CONTENT: two materials merge when their image
-# bytes, sampler and alpha/PBR settings all match.  The two section exports
-# reference the same shared BIG*.TMS pages, so without this the merged file
-# carries two copies of every non-course texture and editing one of them in
-# Blender only changes half the track.
+# The output is rebuilt from scratch rather than produced by concatenating the
+# inputs and offsetting every index. That makes it possible to deduplicate
+# materials by content: two materials merge when their image bytes, sampler and
+# alpha and PBR settings all match. Both inputs reference the same shared
+# BIG*.TMS pages, so without this the merged file would carry two copies of
+# every texture that is not course specific.
 #
-# Anything not referenced by a surviving primitive is simply never copied, so
-# the merged blob contains no orphaned image or accessor data.
+# Rebuilding also means nothing unreferenced is copied, so the merged binary
+# blob holds no orphaned image or accessor data.
 
 import hashlib
 from pathlib import Path
@@ -21,10 +20,11 @@ from pygltflib import (GLTF2, Scene, Node, Mesh, Primitive, Buffer, BufferView,
                        Image as GImage, PbrMetallicRoughness, TextureInfo,
                        ARRAY_BUFFER, ELEMENT_ARRAY_BUFFER, TRIANGLES)
 
-# glTF componentType -> bytes per component
+# Bytes per component for each glTF componentType, and components per type.
 _CSIZE = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}
 _NCOMP = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}
 
+# Vertex attributes copied across, if present on a primitive.
 _ATTRS = ('POSITION', 'NORMAL', 'TANGENT', 'TEXCOORD_0', 'TEXCOORD_1',
           'COLOR_0', 'JOINTS_0', 'WEIGHTS_0')
 
@@ -33,10 +33,10 @@ def merge_glb(path_a: str, path_b: str, out_path: str):
     """
     Merge two GLB files into a single GLB at out_path.
 
-    All nodes from both files appear in the output scene.  Materials that are
-    byte-for-byte equivalent are collapsed into one.
+    All nodes from both files appear in the output scene. Materials whose
+    image, sampler and alpha settings all match are collapsed into one.
     """
-    srcs = [(GLTF2.load(p)) for p in (path_a, path_b)]
+    srcs = [GLTF2.load(p) for p in (path_a, path_b)]
 
     blob = bytearray()
     bviews, accs = [], []
@@ -47,6 +47,7 @@ def merge_glb(path_a: str, path_b: str, out_path: str):
     mat_map = {}
 
     def add_view(raw: bytes, target=None) -> int:
+        """Append raw bytes to the output blob and return the new view index."""
         off = len(blob)
         blob.extend(raw)
         while len(blob) % 4:
@@ -58,10 +59,12 @@ def merge_glb(path_a: str, path_b: str, out_path: str):
         return len(bviews) - 1
 
     def view_bytes(g, gblob, bv_index):
+        """Read one buffer view out of a source file."""
         bv = g.bufferViews[bv_index]
         return bytes(gblob[bv.byteOffset: bv.byteOffset + bv.byteLength])
 
     def copy_accessor(g, gblob, idx, target):
+        """Copy a source accessor and its data into the output."""
         a = g.accessors[idx]
         bv = g.bufferViews[a.bufferView]
         start = bv.byteOffset + (a.byteOffset or 0)
@@ -77,6 +80,7 @@ def merge_glb(path_a: str, path_b: str, out_path: str):
         return len(accs) - 1
 
     def get_sampler(g, tex):
+        """Return an output sampler index matching the source texture's."""
         if tex.sampler is None:
             return None
         s = g.samplers[tex.sampler]
@@ -88,6 +92,12 @@ def merge_glb(path_a: str, path_b: str, out_path: str):
         return sampler_map[key]
 
     def get_material(g, gblob, idx):
+        """
+        Return an output material index for a source material.
+
+        Materials with the same image, sampler and alpha settings share one
+        output material, so a texture present in both inputs is stored once.
+        """
         m = g.materials[idx]
         pbr = m.pbrMetallicRoughness
         tex_idx = None

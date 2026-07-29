@@ -35,35 +35,6 @@ This repo doesn't provide any actual game data due to obvious copyright reasons.
 You need to extract your RRR CD data to a folder.  
 I've used CDmage 1.02.1 Beta 5.
 
-I think that the script would work with any Ridge Racer Revolution release but that is unconfirmed and not tested.  
-You should test your game files using this md5 hash table. Checking `SLUS_002.14` should be sufficient.
-
-| File         | md5                                |
-|--------------|------------------------------------|
-| SLUS_002.14  | `41f2a29e5f02f862e7bfb08f522e3fcc` |
-| RIDGE.EXE    | `ff0a67a7e274201f5ca21c53e2df45ee` |
-| SYSTEM.CNF   | `412d659f0c06bb3eb2c5120ae2c2090d` |
-| BIG0.TMS     | `6c56129f420edc5bc625bc71106b5ff2` |
-| BIG1.TMS     | `57466f41c1b06467fe50dbb3834ba05d` |
-| BIG2.TMS     | `ccdc6f7d1c344356ded8fcf055744f20` |
-| BIG3.TMS     | `31bd0df6f1670e003f6f8d6dbda44aab` |
-| BIG4.TMS     | `d1d22ee735b56373a919c2330de71333` |
-| CAR.RSO      | `cee400ecad252c95d8f96a8bb450e8a7` |
-| CRS_EASY.DAT | `20518e907633ea852af29acf4ad2c309` |
-| CRS_HIGH.DAT | `b9577dfdceb93b3c583bb3db75e13a50` |
-| CRS_MID.DAT  | `57dbb9977220408cbe849796e732eaf3` |
-| CRS_OLDE.DAT | `934718618989c7fa9722c2ca7fa783a8` |
-| CRS_OLDH.DAT | `582afb1c5eb7ddfa1f46847667a53a11` |
-| EASY_CT.DAT  | `2d8f94b5df0c67ad585a34960b0849d8` |
-| EASY_PCT.DAT | `86cc700b19ed84c22f1c140613ef640b` |
-| FIRE.SEQ     | `62ec70b9d102de03c52b18c1a409bdf3` |
-| HIGH_PCT.DAT | `cca4e441d63dd18783211fd916aabe49` |
-| MID_PCT.DAT  | `d5c308d76d29c806c1d1f8cf570ebc1b` |
-| OLD_PCT.DAT  | `2082c145b0ad2c388753ed946cf041b8` |
-| RR.VB        | `aef8667db6d27aa4fdfe6faf49252a9f` |
-| RR.VH        | `6a95c27af524d1b9c6c7db164925da84` |
-| TANGO.SEQ    | `71b62826cba59341d086c3597246da01` |
-
 When using Windows you can easily list the md5 hashes of your files:  
 `for %i in (*.*) do certutil -hashfile %i md5`  
 You can also check via redump: http://redump.org/disc/2731/
@@ -89,14 +60,15 @@ output/
   car_parts/  - wheels, special vehicles, etc.
   props/      - scenery objects from CAR.RSO that are not cars
   tracks/     - crs_easy.glb, crs_mid.glb, crs_high.glb, crs_olde.glb, crs_oldh.glb
+                plus the _s2 and _s3 intermediates each one is merged from
 ```
 
 ---
 
 ## File Format Reference
 
-All confirmed formats are documented here.
-Anything not yet fully verified is marked **(unverified)**.
+All confirmed formats are documented here. Remaining gaps are listed under
+Known Limitations.
 
 ---
 
@@ -185,10 +157,10 @@ A sequence of command blocks, terminated by any block with count = 0.
 | CMD | Stride | Description                       |
 |-----|--------|-----------------------------------|
 | 0   | 40     | Flat textured quad                |
-| 1   | 48     | Flat textured quad + LOD variant  |
+| 1   | 48     | Flat textured quad + texture window |
 | 2   | 32     | Flat colored quad (no texture)    |
 | 3   | 64     | Gouraud textured quad             |
-| 4   | 72     | Gouraud textured quad + LOD       |
+| 4   | 72     | Gouraud textured quad + texture window |
 | 5   | 56     | Gouraud colored quad (no texture) |
 
 **Vertex layout (bytes 0-23, all commands):**
@@ -212,6 +184,22 @@ A sequence of command blocks, terminated by any block with count = 0.
 ```
 
 **UV / material (CMD 3 - at byte 48):** same layout, 24 bytes later.
+
+**Texture window (CMD 1 at byte 40, CMD 4 at byte 64):**
+
+```
+[+0]  u16  window offset X
+[+2]  u16  window offset Y
+[+4]  u16  window width
+[+6]  u16  window height
+```
+
+The GPU wraps texture coordinates inside this rectangle, so a quad whose U runs
+to 252 against a 64-wide window repeats a 64-pixel texture four times instead
+of stretching a quarter of the page across the face. Width and height are
+always powers of two, the offsets are always exact multiples of them, and the
+rectangle always lies inside the 256x256 page. Ignoring the window makes such
+polygons look as though a texture atlas has been painted onto them.
 
 **Color (CMD 2 - at byte 24, CMD 5 - at byte 48):**
 
@@ -240,15 +228,14 @@ Five courses: CRS_EASY, CRS_MID, CRS_HIGH, CRS_OLDE, CRS_OLDH.
 
 **Tile grid** (at file offset 0x18): 32x32 array of s16 values.
 Each cell is a segment index (0-146) or -1 for empty.
-Index formula: `gi = row * 32 + col` (confirmed, simple row-major).
+Index formula: `gi = row * 32 + 30 - col` (from the renderer's tile walk).
 Tile world origin: `(col * 2048, row * 2048)` in world units.
 
 **Section 0 - Road segments:**
 - u32 count, then count * u32 relative offsets (from section-0 start)
-- Each segment is a display list (same format as CAR.RSO)
-- CMD0 = close-up road surface (extract these)
-- CMD1 = distant/LOD road (skip - range extends beyond tile boundaries)
-- CMD2 = colored kerb strips (skip)
+- Each segment is a display list, but the road renderer uses its own stride
+  table: CMD0, CMD1 and CMD2 are all 40-byte textured quads here, and all
+  three are extracted
 
 **Road vertex coordinate conversion:**
 ```
@@ -265,22 +252,27 @@ world_Z = vertex_Z / 4 + row * 2048
 - 384 halfwords wide x 256 rows of raw VRAM data
 - Loaded into VRAM at position (640, 256)
 
-**Section 3 - Alternate texture block (unverified):**
-- Same size/format as section 2 (double-buffer for streaming)
+**Section 3 - Second course texture:**
+- Same size, format and VRAM destination as section 2
+- Which of the two is resident depends on where the camera is along the road
+  spine; see the texture switch table in section 5
 
 **Section 4 - Object placement table:**
 - Records are 20 bytes each; count = (section_5_offset - section_4_offset) / 20
 
 | Offset | Type | Description                                 |
 |--------|------|---------------------------------------------|
-| +0x00  | u16  | Section-1 entry index                       |
+| +0x00  | u16  | Model word: bits 0-11 are the section-1 entry index, bit 12 marks a conditional-render variant, bits 13-15 mark a control record |
 | +0x02  | u16  | Y-axis rotation (PS1 units: 4096 = 360 deg) |
 | +0x04  | s32  | World X                                     |
 | +0x08  | s32  | World Y                                     |
 | +0x0C  | s32  | World Z                                     |
-| +0x10  | s32  | Flags (meaning not fully known)             |
+| +0x10  | s32  | Flags, always a value shifted left by 16. A negative value marks a control record |
 
-Records are sentinels if: entry_index >= s1_count OR (world_X == 0 AND world_Z == 0).
+A record is skipped if any of the following hold: bits 13-15 of the model word
+are set, the masked entry index is >= s1_count, both world_X and world_Z are
+zero, or the flags field is negative. Records that repeat an earlier
+(model, rotation, position) are duplicates and are also skipped.
 
 **Object vertex placement:**
 ```
@@ -290,25 +282,42 @@ world_Y = vertex_Y   / 4 + placement_Y
 world_Z = rotated_Z  / 4 + placement_Z
 ```
 
-**Section 5 - Sub-section pointer table (unverified):**
-- Purpose partially understood; contains 25 sub-pointers used internally.
+**Section 5 - Sub-section pointer table:**
+- A table of u32 offsets, each relative to the start of section 5
+- `sub[10]` is the course descriptor: a table of spine positions in node<<8
+  units. The loader's own debug output names `+0x90`/`+0x94` as a tunnel range
+  and `+0xA8`/`+0xAC` as a jump range. At `+0xD0` sits the texture switch
+  table, two banks of `{first switch point, second switch point, direction}`
+  with stride 0x0C, which decides where the course texture changes between
+  sections 2 and 3.
+- `sub[20]` is the road spine: a u32 node count followed by 20 bytes per node.
+  The first two s32 fields give the node position, and the s16 at `+0x0A` is
+  the node's heading angle.
 
 ---
 
-### *_PCT.DAT / *_CT.DAT - Course CLUT Banks
+### *_PCT.DAT / *_CT.DAT - Course Palette Files
 
 Sequence of upload records, terminated by a size-0 record.
 
 **Record:**
 
-| Offset | Type | Description        |
-|--------|------|--------------------|
-| +0x00  | u32  | Total record size  |
-| +0x04  | u16  | VRAM X destination |
-| +0x06  | u16  | VRAM Y destination |
-| +0x08  | u16  | Width (halfwords)  |
-| +0x0A  | u16  | Height (rows)      |
-| +0x0C  | ...  | Raw ABGR1555 data  |
+| Offset | Type | Description                                   |
+|--------|------|-----------------------------------------------|
+| +0x00  | u32  | Payload size in bytes, equal to `w * h * 2`, excluding this 12-byte header |
+| +0x04  | u16  | VRAM X destination                            |
+| +0x06  | u16  | VRAM Y destination                            |
+| +0x08  | u16  | Width (halfwords)                             |
+| +0x0A  | u16  | Height (rows)                                 |
+| +0x0C  | ...  | Raw ABGR1555 data                             |
+
+Structurally the next record begins at `pos + 12 + size`, and walking a
+`*_PCT.DAT` that way yields three records: the palette row at (0, 494), a
+320x256 block at (320, 256) and a 256x256 block at (768, 0). **Only the first
+is uploaded.** The game's loader advances by `size` alone, so it lands inside
+the first record's payload, reads a header the GPU discards, and stops. A VRAM
+dump confirms the last two blocks never reach VRAM, so the extractor also
+loads only the first record. `*_CT.DAT` contains the palette row only.
 
 **Per-course load order** (PCT first, CT last - last write wins in VRAM):
 
@@ -330,26 +339,25 @@ Sequence of upload records, terminated by a size-0 record.
 | X=0..639, Y=256..511    | BIG0/BIG3/BIG4 texture data         |
 | X=0..639, Y=494..511    | CLUTs from BIG1, BIG2, PCT/CT files |
 | X=640..1023, Y=0..255   | BIG1/BIG2 texture data              |
-| X=640..1023, Y=256..511 | Course texture (CRS section 2)      |
+| X=640..1023, Y=256..511 | Course texture (CRS section 2 or 3) |
 
 ---
 
 ## Known Limitations
 
-- **No texture stitching.** Each (TPAGE, CLUT) pair becomes a separate GLB
-  material with a small cropped atlas. This is visually correct but results
-  in many materials per mesh.
+- **One material per texture page and palette.** Materials are shared across
+  the whole file, so editing one changes every mesh that uses it. Two pages
+  that differ only in palette still need separate materials, which is why a
+  track ends up with roughly 220 of them.
 
-- **Section-3 (alternate texture) not loaded.** Only section-2 is used.
-  Streaming behavior between sections 2 and 3 is not fully understood.
+- **Texture section assigned per mesh.** Each road segment and placed object is
+  given whichever course texture is resident when the camera is nearest to it.
+  Around the two switch points the hardware holds a split window for about
+  three spine nodes, and geometry there is assigned whole rather than split by
+  row.
 
-- **Section-4 flags field unknown.** The last 4 bytes of each placement
-  record have unknown meaning and are ignored.
-
-- **Road surface is a spine ribbon, not the textured road mesh.** Section-0
-  contains pre-processed GPU packet display lists rendered via a PS1 hardware
-  tile-streaming path (confirmed by RIDGE.EXE decompile). Extracting this
-  correctly is a future task.
+- **Section-4 flags field only partly understood.** The sign distinguishes
+  control records from real placements; the remaining bits are unused here.
 
 ---
 
@@ -372,7 +380,7 @@ requirements.txt
 
 ## Support
 Reverse engineering is a lot of work, even with some AI support for data analysis.  
-If you’d like to support me, feel free to toss me a coin for a tea or a burger.  
+If you'd like to support me, feel free to toss me a coin for a tea or a burger.  
 Thanks a lot for considering!
 
 #### Patreon

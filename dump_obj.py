@@ -1,6 +1,8 @@
-# Debug geometry export - writes road ribbon (from spine) and placed objects as OBJ.
-# No textures, no GLB dependencies - use this to verify geometry in Blender
-# (File > Import > Wavefront OBJ, then press Z for wireframe).
+# Debug geometry export.
+#
+# Writes the road ribbon built from the spine, plus the placed objects, as a
+# plain Wavefront OBJ with no textures and no GLB dependencies. Useful for
+# checking geometry on its own in Blender.
 #
 # Usage: python dump_obj.py <game_data_dir> [output.obj]
 
@@ -14,12 +16,13 @@ GTE_SCALE = 4
 F0_FLOOR  = 0xF000   # 61440
 
 
+# PS1 angles use 4096 units per full turn.
 def _sin(a): return math.sin(a * math.pi / 2048)
 def _cos(a): return math.cos(a * math.pi / 2048)
 
 
 def _rotate_y(x, z, angle):
-    # Matrix from RIDGE.EXE FUN_800527dc: new_x = cos*x - sin*z, new_z = sin*x + cos*z
+    """Rotate an (x, z) pair around the Y axis by a PS1 angle."""
     s, c = _sin(angle), _cos(angle)
     return x * c - z * s, x * s + z * c
 
@@ -131,15 +134,28 @@ def dump(game_dir, out_path):
 
     obj_v, obj_f = [], []
     placed = 0
+    seen = set()
     for i in range((s4_end - s4_off) // 20):
         off   = s4_off + i * 20
-        midx  = struct.unpack_from('<H', data, off)[0]
+        raw   = struct.unpack_from('<H', data, off)[0]
         angle = struct.unpack_from('<H', data, off + 2)[0]
         wx    = struct.unpack_from('<i', data, off + 4)[0]
         wy    = struct.unpack_from('<i', data, off + 8)[0]
         wz    = struct.unpack_from('<i', data, off + 12)[0]
-        if midx >= s1_n or (wx == 0 and wz == 0):
+        flags = struct.unpack_from('<i', data, off + 16)[0]
+
+        # Same record filtering as rrr/track.py: mask the model index to 12
+        # bits, drop control records, and skip duplicate placements.
+        midx = raw & 0xFFF
+        if (raw >> 13) & 0x7 or midx >= s1_n:
             continue
+        if (wx == 0 and wz == 0) or flags < 0:
+            continue
+        key = (midx, angle, wx, wy, wz)
+        if key in seen:
+            continue
+        seen.add(key)
+
         seg_verts, seg_quads = lib[midx]
         base = len(obj_v)
         for vx, vy, vz in seg_verts:

@@ -9,7 +9,7 @@
 #   (body_idx, shadow_idx, underside_idx, wheel_idx, car_name)
 # The same wheel model is often shared between multiple cars.
 #
-# Notable non-car entries (verified by manual inspection):
+# Notable non-car entries:
 #   51  - blimp
 #   64  - plane
 #   65  - helicopter body

@@ -1,97 +1,91 @@
 # Display list format shared by CAR.RSO and CRS_*.DAT.
 #
 # A display list is a sequence of command blocks:
-#   [+0x00] u16  cmd    - command type (see CMD_STRIDE)
-#   [+0x02] u16  count  - number of records that follow
-#   [+0x04] ...  count * stride bytes of polygon data
-# Terminated by any block where count == 0.
 #
-# Command types and their per-record sizes (OBJECT renderer):
+#   [+0x00] u16  command type
+#   [+0x02] u16  number of records that follow
+#   [+0x04] ...  count * stride bytes of polygon records
 #
-#   CMD  Stride  Description
-#    0     40    Flat textured quad
-#    1     48    Flat textured quad + LOD variant
-#    2     32    Flat colored quad (no texture)
-#    3     64    Gouraud textured quad
-#    4     72    Gouraud textured quad + LOD variant
-#    5     56    Gouraud colored quad (no texture)
+# The list ends at the first block whose count is zero.
 #
-# Section-0 road segments use a DIFFERENT renderer (FUN_80055a58 via
-# PTR_LAB_8007565c) than section-1 objects (FUN_80054654 via
-# PTR_LAB_80075614).  The road renderer treats ALL commands as 40-byte
-# textured quads:
+# Command types and record sizes for the object renderer, used by CAR.RSO and
+# CRS section 1:
 #
-#   CMD  Stride  Description
-#    0     40    Flat textured quad (close-up road surface)
-#    1     40    Flat textured quad (distant / LOD variant)
-#    2     40    Flat textured quad (barriers, kerb detail)
+#   0   40   flat textured quad
+#   1   48   flat textured quad with texture window
+#   2   32   flat coloured quad
+#   3   64   gouraud textured quad
+#   4   72   gouraud textured quad with texture window
+#   5   56   gouraud coloured quad
 #
-# Common record layout (all commands share the first 24 bytes):
-#   [0..15]  4x (s16 X, s16 Y) - screen X/Y for vertices 0-3
-#   [16..23] 4x s16 Z          - depth for vertices 0-3
+# CRS section 0 is drawn by a separate renderer that treats every command as a
+# 40-byte textured quad, so it needs ROAD_CMD_STRIDE instead.
 #
-# Textured commands - UV and material words:
-#   For CMD 0, 1, 2(road), 4:
-#     [24] u8 U0, [25] u8 V0, [26..27] u16 CLUT
-#     [28] u8 U1, [29] u8 V1, [30..31] u16 TPAGE
-#     [32] u8 U2, [33] u8 V2
-#     [36] u8 U3, [37] u8 V3
-#   For CMD 3:
-#     [48] u8 U0, [49] u8 V0, [50..51] u16 CLUT
-#     [52] u8 U1, [53] u8 V1, [54..55] u16 TPAGE
-#     [56] u8 U2, [57] u8 V2
-#     [60] u8 U3, [61] u8 V3
+# All records begin with the same 24 bytes of geometry:
 #
-# Colored commands (OBJECT renderer only):
-#   CMD 2: [24..27] u32  {R, G, B, 0}   (stride 32)
-#   CMD 5: [48..51] u32  {R, G, B, 0}   (stride 56)
+#   [0..15]  four (s16 X, s16 Y) pairs, one per vertex
+#   [16..23] four s16 Z values, one per vertex
 #
-# TPAGE / CLUT word decoding:
-#   tpage_x  = (tpage & 0x0F) * 64   - VRAM X of texture page
+# Textured records then hold UVs and material words, at offset 24 for every
+# command except 3, which puts them at 48:
+#
+#   [+0] u8 U0, [+1] u8 V0, [+2..3] u16 CLUT
+#   [+4] u8 U1, [+5] u8 V1, [+6..7] u16 TPAGE
+#   [+8] u8 U2, [+9] u8 V2
+#   [+12] u8 U3, [+13] u8 V3
+#
+# Coloured records hold one u32 {R, G, B, 0} at offset 24 for command 2 and at
+# offset 48 for command 5.
+#
+# Decoding the material words:
+#
+#   tpage_x  = (tpage & 0x0F) * 64
 #   tpage_y  = ((tpage >> 4) & 1) * 256
-#   tex_mode = (tpage >> 7) & 3      - 0=4bpp 1=8bpp 2=15bpp
-#   clut_x   = (clut & 0x3F) * 16    - VRAM X of CLUT row
-#   clut_y   = (clut >> 6) & 0x1FF   - VRAM Y of CLUT row
+#   tex_mode = (tpage >> 7) & 3        0 = 4bpp, 1 = 8bpp, 2 = 15bpp
+#   clut_x   = (clut & 0x3F) * 16
+#   clut_y   = (clut >> 6) & 0x1FF
 
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
-# Object renderer (CAR.RSO, CRS section-1).
+# Record stride per command for the object renderer.
 CMD_STRIDE = {0: 40, 1: 48, 2: 32, 3: 64, 4: 72, 5: 56}
 
-# Road renderer (CRS section-0).  All commands are 40-byte textured quads.
+# Record stride per command for the road renderer.
 ROAD_CMD_STRIDE = {0: 40, 1: 40, 2: 40}
 
-# Commands that are vertex-colored (no texture) in the OBJECT renderer.
+# Commands that carry a vertex colour instead of a texture.
 _OBJ_COLORED_CMDS = frozenset({2, 5})
 
 
 @dataclass
 class Poly:
-    """One textured or colored quad extracted from a display list."""
-    verts: list          # list of 4 (x, y, z) tuples in local/world space
-    uvs: list            # list of 4 (u, v) tuples (0..255 each)
+    """One textured or coloured quad extracted from a display list."""
+    verts: list          # four (x, y, z) tuples, local or world space
+    uvs: list            # four (u, v) tuples, 0 to 255 each
     tpage_x: int = 0     # VRAM X of the texture page
     tpage_y: int = 0     # VRAM Y of the texture page
-    clut_x: int = 0      # VRAM X of the CLUT
-    clut_y: int = 0      # VRAM Y of the CLUT
-    mode: int = 0        # texture mode: 0=4bpp 1=8bpp 2=15bpp
+    clut_x: int = 0      # VRAM X of the palette row
+    clut_y: int = 0      # VRAM Y of the palette row
+    mode: int = 0        # 0 = 4bpp, 1 = 8bpp, 2 = 15bpp
     has_tex: bool = True
-    color: tuple = (128, 128, 128)   # fallback RGB for untextured polys
-    twin: tuple = None   # texture window (off_x, off_y, w, h) or None
+    color: tuple = (128, 128, 128)   # used when has_tex is False
+    twin: tuple = None   # texture window (off_x, off_y, w, h), or None
 
 
 def _decode_tpage(t: int) -> tuple:
+    """Split a TPAGE word into (vram_x, vram_y, pixel_mode)."""
     return (t & 0xF) * 64, ((t >> 4) & 1) * 256, (t >> 7) & 3
 
 
 def _decode_clut(c: int) -> tuple:
+    """Split a CLUT word into (vram_x, vram_y)."""
     return (c & 0x3F) * 16, (c >> 6) & 0x1FF
 
 
 def _parse_verts(rec: bytes):
-    """Extract the 4 (X, Y, Z) vertices shared by all record types."""
+    """Extract the four (X, Y, Z) vertices common to every record type."""
     xs = [struct.unpack_from('<h', rec, j * 4)[0]     for j in range(4)]
     ys = [struct.unpack_from('<h', rec, j * 4 + 2)[0] for j in range(4)]
     zs = [struct.unpack_from('<h', rec, 16 + j * 2)[0] for j in range(4)]
@@ -99,7 +93,7 @@ def _parse_verts(rec: bytes):
 
 
 def _parse_tex(rec: bytes, base: int):
-    """Extract UV coords and TPAGE/CLUT from a textured record."""
+    """Extract the UVs and decoded TPAGE/CLUT from a textured record."""
     w0 = struct.unpack_from('<I', rec, base)[0]
     w1 = struct.unpack_from('<I', rec, base + 4)[0]
     u0, v0 = w0 & 0xFF, (w0 >> 8) & 0xFF
@@ -118,25 +112,22 @@ def _parse_record(rec: bytes, cmd: int, colored_cmds: frozenset) -> Poly:
     """Build a Poly from one raw display-list record."""
     verts = _parse_verts(rec)
 
-    # Vertex-colored (no texture).
     if cmd in colored_cmds:
         col_off = 48 if cmd == 5 else 24
         w = struct.unpack_from('<I', rec, col_off)[0]
         color = (w & 0xFF, (w >> 8) & 0xFF, (w >> 16) & 0xFF)
         return Poly(verts, [(0, 0)] * 4, has_tex=False, color=color)
 
-    # Textured.  CMD 3 puts UVs at offset 48; everything else at 24.
     base = 48 if cmd == 3 else 24
     uvs, tx, ty, cx, cy, tp = _parse_tex(rec, base)
 
-    # CMD 1 and CMD 4 carry 8 trailing bytes holding the PS1 texture window:
-    # four u16 giving (offset_x, offset_y, width, height) in texels.  The GPU
-    # wraps texture coordinates inside that window, so a quad whose U runs to
-    # 252 with a 64-wide window tiles a 64-pixel texture four times rather
-    # than stretching a quarter of the page across the face.
-    # Verified over all 1823 CMD 1/4 records in the five courses: width and
-    # height are always powers of two, the offsets are always exact multiples
-    # of them, and the window always lies inside the 256x256 page.
+    # Commands 1 and 4 end with eight bytes holding the PS1 texture window:
+    # four u16 giving offset_x, offset_y, width and height in texels. The GPU
+    # wraps texture coordinates inside that rectangle, so a quad whose U runs
+    # to 252 against a 64-wide window repeats a 64-pixel texture four times
+    # instead of stretching a quarter of the page across the face. Width and
+    # height are always powers of two and the rectangle always lies inside the
+    # 256 by 256 page.
     twin = None
     if cmd in (1, 4):
         wbase = 40 if cmd == 1 else 64
@@ -151,8 +142,9 @@ def _parse_record(rec: bytes, cmd: int, colored_cmds: frozenset) -> Poly:
 def _parse_display_list_impl(data: bytes, stride_table: dict,
                              colored_cmds: frozenset) -> list:
     """
-    Internal: parse a display list using the given stride table.
-    Stops at count == 0 or an unknown command type.
+    Parse a display list using the given stride table.
+
+    Stops at a zero record count or at an unrecognised command type.
     """
     polys = []
     pos = 0
@@ -178,15 +170,17 @@ def _parse_display_list_impl(data: bytes, stride_table: dict,
 
 def parse_display_list(data: bytes) -> list:
     """
-    Parse an object display list (CAR.RSO / CRS section-1).
-    CMD 2 and CMD 5 are vertex-colored; rest are textured.
+    Parse an object display list, as used by CAR.RSO and CRS section 1.
+
+    Commands 2 and 5 are vertex coloured; the rest are textured.
     """
     return _parse_display_list_impl(data, CMD_STRIDE, _OBJ_COLORED_CMDS)
 
 
 def parse_road_display_list(data: bytes) -> list:
     """
-    Parse a road segment display list (CRS section-0).
-    All commands are 40-byte textured quads.
+    Parse a road segment display list, as used by CRS section 0.
+
+    Every command is a 40-byte textured quad here.
     """
     return _parse_display_list_impl(data, ROAD_CMD_STRIDE, frozenset())

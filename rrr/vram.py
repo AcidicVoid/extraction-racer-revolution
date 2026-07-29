@@ -1,12 +1,10 @@
 # PS1 VRAM simulation.
 #
-# The PS1 has a 1024x512 pixel VRAM, where each pixel is a 16-bit halfword.
-# Everything - textures, palettes (CLUTs), and framebuffers - lives in this
-# single address space.  We replicate it here as a flat byte array so we can
-# load BIG*.TMS and CRS texture data then sample it exactly as the hardware
-# would when rendering.
+# The PS1 has a 1024 by 512 VRAM where every cell is a 16-bit halfword.
+# Textures, palettes and framebuffers all live in that one address space. This
+# module holds an equivalent flat byte array, so game texture data can be
+# loaded into it and then sampled the same way the hardware would.
 
-import struct
 from rrr.color import expand_palette, decode_4bpp, decode_8bpp, decode_15bpp
 from PIL import Image
 
@@ -21,9 +19,8 @@ class VramSim:
         # Two bytes per halfword, 1024 halfwords wide, 512 rows tall.
         self.mem = bytearray(VRAM_WIDTH * VRAM_HEIGHT * 2)
 
-    # -- low-level helpers --------------------------------------------------
-
     def _offset(self, x: int, y: int) -> int:
+        """Byte offset of the halfword at (x, y)."""
         return (y * VRAM_WIDTH + x) * 2
 
     def load_rect(self, x: int, y: int, w: int, h: int, data: bytes):
@@ -33,7 +30,8 @@ class VramSim:
         the actual payload is (size - 12) bytes, which can be up to 12 bytes
         shorter than w*h*2.  Python bytearray slice-assignment with a shorter
         source silently shrinks the array, corrupting every subsequent VRAM
-        offset.  We therefore copy row-by-row and zero-pad any short row.
+        offset, so each row is copied separately and any short row is
+        zero-padded.
         """
         row_bytes = w * 2
         for row in range(h):
@@ -43,8 +41,6 @@ class VramSim:
                 chunk = chunk + bytes(row_bytes - len(chunk))
             dst = self._offset(x, y + row)
             self.mem[dst: dst + row_bytes] = chunk
-
-    # -- higher-level loaders -----------------------------------------------
 
     def load_tms_block(self, blk):
         """Upload one TmsBlock (CLUT + image data) into VRAM."""
@@ -58,8 +54,6 @@ class VramSim:
     def load_pct_block(self, x: int, y: int, w: int, h: int, data: bytes):
         """Upload one PCT/CT CLUT record into VRAM."""
         self.load_rect(x, y, w, h, data)
-
-    # -- texture sampling ---------------------------------------------------
 
     def extract_texture(self, tx: int, ty: int, cx: int, cy: int,
                         mode: int,

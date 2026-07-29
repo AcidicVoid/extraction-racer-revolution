@@ -1,11 +1,11 @@
 # BIG*.TMS texture container format.
 #
-# Each BIG file is a sequence of blocks.  The game loads them at startup in
-# order: BIG4 -> BIG0 -> BIG3 -> BIG1 -> BIG2.  Each block uploads a CLUT
-# and/or an image rectangle into VRAM.
+# Each BIG file is a sequence of blocks. The game loads them at startup in the
+# order BIG4, BIG0, BIG3, BIG1, BIG2, so later files overwrite earlier ones.
+# Each block uploads a palette, an image rectangle, or both into VRAM.
 #
 # Block layout (all little-endian):
-#   [+0x00] u32  block_total_size   (including this header)
+#   [+0x00] u32  block_total_size, including this header
 #   [+0x04] u32  unknown
 #   [+0x08] u32  flags
 #               bits 0-2: pixel mode  (0=4bpp, 1=8bpp, 2=15bpp)
@@ -15,22 +15,20 @@
 #   [+0x0C] u32  clut_section_size
 #   [+0x10] u16  clut_vram_x
 #   [+0x12] u16  clut_vram_y
-#   [+0x14] u16  clut_width   (number of ABGR1555 entries per row)
-#   [+0x16] u16  clut_height  (number of rows)
+#   [+0x14] u16  clut_width   entries per row
+#   [+0x16] u16  clut_height  number of rows
 #   [+0x18] ...  raw ABGR1555 CLUT data
 #
 # Image section (immediately after the optional CLUT section):
 #   [+0x00] u32  image_section_size
 #   [+0x04] u16  img_vram_x
 #   [+0x06] u16  img_vram_y
-#   [+0x08] u16  img_width    (halfwords per row)
+#   [+0x08] u16  img_width    halfwords per row
 #   [+0x0A] u16  img_height
 #   [+0x0C] ...  raw pixel data
 #
-# Pixel widths in pixels (not halfwords):
-#   4bpp  -> halfwords * 4
-#   8bpp  -> halfwords * 2
-#   15bpp -> halfwords * 1
+# Image width in pixels rather than halfwords is halfwords * 4 for 4bpp,
+# halfwords * 2 for 8bpp, and halfwords * 1 for 15bpp.
 
 import struct
 from dataclasses import dataclass, field

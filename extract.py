@@ -11,11 +11,11 @@ from rrr.car import (parse_car_rso, CAR_TABLE, ALL_CAR_INDICES,
                      ENTRY_LABEL, WHEEL_CARS)
 from rrr.track import parse_crs, load_course_textures, compute_section_map, CLUT_FILES
 from rrr.merge_glb import merge_glb
-from rrr.glb import export_glb, HAS_GLTF
+from rrr.glb import export_glb
 from rrr.displaylist import Poly
 
 
-# Spacing used when placing all cars side-by-side in the grid export.
+# Layout of the combined car grid export.
 _GRID_COLS      = 5
 _GRID_SPACING_X = 900
 _GRID_SPACING_Z = 800
@@ -26,8 +26,8 @@ _WHEEL_OFFSETS  = {
     'RR': ( 145,  70),
 }
 
-# BIG files are loaded in this order so later files overwrite earlier ones,
-# matching the game's startup sequence.
+# Load order for the shared texture files, matching the game's startup
+# sequence so that later files overwrite earlier ones.
 _BIG_LOAD_ORDER = ('BIG4.TMS', 'BIG0.TMS', 'BIG3.TMS', 'BIG1.TMS', 'BIG2.TMS')
 
 
@@ -47,7 +47,7 @@ def _export_cars(car_entries: list, vram: VramSim, out: Path):
     part_dir = out / 'car_parts'
     prop_dir = out / 'props'
 
-    # Individual car bodies.
+    # One file per car body.
     for i, (body, shadow, under, wheel, name) in enumerate(CAR_TABLE):
         polys = car_entries[body] if body < len(car_entries) else []
         if polys:
@@ -55,7 +55,7 @@ def _export_cars(car_entries: list, vram: VramSim, out: Path):
                        str(car_dir / f'{i:02d}_{name}.glb'),
                        scale=1 / 256.0)
 
-    # All cars in one grid scene.
+    # All car bodies and wheels laid out on a grid in one scene.
     grid_nodes = []
     for idx, (body, shadow, under, wheel, name) in enumerate(CAR_TABLE):
         col = idx % _GRID_COLS
@@ -73,7 +73,7 @@ def _export_cars(car_entries: list, vram: VramSim, out: Path):
         export_glb(grid_nodes, vram,
                    str(car_dir / 'all_cars_grid.glb'), scale=1 / 256.0)
 
-    # Everything else in CAR.RSO.
+    # Remaining CAR.RSO entries: wheels, special vehicles and scenery props.
     for eid, polys in enumerate(car_entries):
         if eid in ALL_CAR_INDICES or not polys:
             continue
@@ -102,7 +102,7 @@ def extract(game_dir: str, out_dir: str):
     for sub in ('textures', 'cars', 'car_parts', 'props', 'tracks'):
         (out / sub).mkdir(parents=True, exist_ok=True)
 
-    # -- textures -----------------------------------------------------------
+    # Textures.
     print('\n=== Loading BIG*.TMS textures ===')
     vram = VramSim()
     all_blocks = []
@@ -127,7 +127,7 @@ def extract(game_dir: str, out_dir: str):
         if blk.image and blk.image.width > 0 and blk.image.height > 0:
             blk.image.save(str(dest))
 
-    # -- cars ---------------------------------------------------------------
+    # Cars, car parts and props.
     print('\n=== Car models ===')
     car_rso = game / 'CAR.RSO'
     if car_rso.exists():
@@ -137,9 +137,9 @@ def extract(game_dir: str, out_dir: str):
     else:
         print('  [CAR.RSO not found]')
 
-    # -- tracks -------------------------------------------------------------
+    # Tracks.
     print('\n=== Tracks ===')
-    # Snapshot VRAM after loading BIG files (no course CLUTs yet).
+    # VRAM with only the shared BIG textures, reused as the base for each course.
     base_vram = bytes(vram.mem)
 
     for crs_path in sorted(game.glob('CRS_*.DAT')):
@@ -147,7 +147,7 @@ def extract(game_dir: str, out_dir: str):
         crs_data = crs_path.read_bytes()
         stem_upper = crs_path.stem.upper()
 
-        # Load CLUT files (shared by both sections).
+        # Palette files, shared by both course texture sections.
         clut_names = CLUT_FILES.get(stem_upper, [])
         clut_data_list = []
         for cname in clut_names:
@@ -165,10 +165,10 @@ def extract(game_dir: str, out_dir: str):
         stem = crs_path.stem.lower()
         track_dir = out / 'tracks'
 
-        # Compute per-node section assignment from spine data.
+        # Decide which course texture each node uses.
         sec_map = compute_section_map(crs_data, road_nodes, named_placements)
 
-        # Split nodes into S2 and S3 groups.
+        # Export each group against its own course texture, then merge.
         s2_nodes = [(n, p) for n, p in node_list if sec_map.get(n, 3) == 2]
         s3_nodes = [(n, p) for n, p in node_list if sec_map.get(n, 3) == 3]
 
@@ -176,19 +176,16 @@ def extract(game_dir: str, out_dir: str):
         s3_path = str(track_dir / f'{stem}_s3.glb')
         merged_path = str(track_dir / f'{stem}.glb')
 
-        # Export S2 group with section 2 textures.
         if s2_nodes:
             vram.mem[:] = base_vram
             load_course_textures(crs_data, vram, clut_data_list, section=2)
             export_glb(s2_nodes, vram, s2_path, scale=1 / 256.0)
 
-        # Export S3 group with section 3 textures.
         if s3_nodes:
             vram.mem[:] = base_vram
             load_course_textures(crs_data, vram, clut_data_list, section=3)
             export_glb(s3_nodes, vram, s3_path, scale=1 / 256.0)
 
-        # Merge into a single GLB.
         if s2_nodes and s3_nodes:
             merge_glb(s2_path, s3_path, merged_path)
             print(f'  merged -> {merged_path}')

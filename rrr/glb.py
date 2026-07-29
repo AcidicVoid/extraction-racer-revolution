@@ -1,26 +1,25 @@
 # GLB export for PS1 polygon data.
 #
-# All geometry is stored as quads (4 verts), split into two triangles on export.
+# Geometry arrives as quads and is split into two triangles per quad.
 #
-# Materials are shared across the whole file: one material per distinct
-# (TPAGE, CLUT, mode, texture window, alpha), built once and referenced by every
-# mesh that uses it, so editing one texture in Blender affects everywhere it is
-# used.  The UV crop for each material is the union over the entire export, so
-# sharing does not inflate the image.  Vertex-colored polys (CMD2/CMD5) share a
-# single white-texture material and rely on the COLOR_0 vertex attribute.
+# Materials are shared across the whole file. There is one material per
+# distinct combination of texture page, palette, pixel mode, texture window and
+# alpha mode, built once and referenced by every mesh that uses it, so editing a
+# texture affects every place it appears. The image for each material is cropped
+# to the union of the UVs over the whole export, so sharing does not make the
+# images any larger than they need to be. Vertex coloured polygons share a
+# single white material and carry their colour in the COLOR_0 attribute.
 #
-# Polys carrying a PS1 texture window (CMD 1 / CMD 4) get the window rectangle
-# as their image, UVs in tile units, and a repeating sampler -- see
-# displaylist.py for the window semantics.
+# Polygons with a texture window get the window rectangle as their image, UVs
+# expressed in tile units, and a repeating sampler, which reproduces the way
+# the hardware wraps them. See displaylist.py for the window layout.
 #
-# Coordinate conversion from PS1 to glTF (Y-up right-hand):
+# Coordinates are converted from PS1 space to the glTF right-handed Y-up
+# convention:
+#
 #   glTF X =  world_X * scale
-#   glTF Y = -world_Y * scale    (PS1 Y is down)
-#   glTF Z = -world_Z * scale    (PS1 Z is into screen)
-#
-# The 'scale' argument is chosen per asset type:
-#   Cars / props:   1/256  (model units -> reasonable glTF meters)
-#   Track geometry: 1/256  (world units in the 2000-60000 range -> 8-235 m)
+#   glTF Y = -world_Y * scale     PS1 Y points down
+#   glTF Z = -world_Z * scale     PS1 Z points into the screen
 
 import hashlib
 import io
@@ -43,28 +42,21 @@ try:
 except ImportError:
     HAS_GLTF = False
 
-_PINK = (200, 0, 200, 255)   # fallback color for missing textures
-
-
-def _white_png() -> bytes:
-    buf = io.BytesIO()
-    Image.new('RGBA', (1, 1), (255, 255, 255, 255)).save(buf, 'PNG')
-    return buf.getvalue()
-
-
+# Stand-in colour for a texture that could not be read out of VRAM.
+_PINK = (200, 0, 200, 255)
 
 
 def export_glb(node_list: list, vram, out_path: str,
                scale: float = 1 / 256.0,
                road_opaque: bool = False):
     """
-    Write a GLB file containing multiple named mesh nodes.
+    Write a GLB file containing one named mesh node per entry in node_list.
 
-    node_list   - list of (name, [Poly, ...])
-    vram        - VramSim instance with textures already loaded
-    out_path    - destination file path
-    scale       - world-unit to glTF-meter conversion factor
-    road_opaque - if True, the first node uses OPAQUE alpha (road surface)
+    node_list   list of (name, [Poly, ...])
+    vram        VramSim with the textures for these polygons already loaded
+    out_path    destination file path
+    scale       world unit to glTF unit conversion factor
+    road_opaque when true the first node uses opaque rather than masked alpha
     """
     if not HAS_GLTF:
         print('  [GLB skipped: pygltflib not installed]')
@@ -78,12 +70,11 @@ def export_glb(node_list: list, vram, out_path: str,
     gltf.asset = pygltflib.Asset(version='2.0')
     blob = bytearray()
     bviews, accs, mats, gtexs, gimgs = [], [], [], [], []
-    # 0 = clamped (normal polys), 1 = repeating (polys with a texture window).
+    # Sampler 0 clamps, sampler 1 repeats for textures with a window. Both use
+    # nearest filtering, which is what the hardware does.
     samps = [Sampler(magFilter=9728, minFilter=9728, wrapS=33071, wrapT=33071),
              Sampler(magFilter=9728, minFilter=9728, wrapS=10497, wrapT=10497)]
     meshes, nodes = [], []
-
-    # -- binary buffer helpers -----------------------------------------------
 
     def _add_view(raw: bytes, target=None) -> int:
         off = len(blob)
@@ -107,26 +98,20 @@ def export_glb(node_list: list, vram, out_path: str,
         accs.append(a)
         return len(accs) - 1
 
-    # -- shared material table -----------------------------------------------
-    #
-    # One material per distinct (TPAGE, CLUT, mode, texture window, alpha),
-    # built once and referenced by every mesh that uses it.  Previously each
-    # mesh created its own image + texture + material, so a texture used by
-    # 200 road segments appeared 200 times and editing it in Blender had to be
-    # repeated 200 times.  The UV crop is the union over the WHOLE export, not
-    # per mesh, so a shared material still gets a tight image.
-
     def _mat_key(p, opaque):
+        """Identity of the material a polygon needs."""
         return (p.tpage_x, p.tpage_y, p.clut_x, p.clut_y,
                 p.mode, p.twin, bool(opaque))
 
+    # First pass over every node, collecting the union of UVs per material so
+    # each image can be cropped once for the whole file.
     bounds = {}
-    for _i, (_n, _polys) in enumerate(node_list):
-        _op = road_opaque and _i == 0
-        for p in _polys:
+    for node_idx, (_, polys) in enumerate(node_list):
+        opaque = road_opaque and node_idx == 0
+        for p in polys:
             if not p.has_tex:
                 continue
-            k = _mat_key(p, _op)
+            k = _mat_key(p, opaque)
             us = [u for u, v in p.uvs]
             vs = [v for u, v in p.uvs]
             b = bounds.get(k)
@@ -136,17 +121,18 @@ def export_glb(node_list: list, vram, out_path: str,
                 b[0] = min(b[0], min(us)); b[1] = min(b[1], min(vs))
                 b[2] = max(b[2], max(us)); b[3] = max(b[3], max(vs))
 
-    mat_of = {}     # key -> material index
-    crop_of = {}    # key -> (u_off, v_off, tex_w, tex_h, tile)
-    # Distinct CLUT addresses often hold identical palettes, so different keys
-    # can produce byte-identical images.  Reuse the material when the image
-    # AND the UV crop match, which keeps the mapping exact.
+    mat_of = {}     # material key to material index
+    crop_of = {}    # material key to (u_off, v_off, tex_w, tex_h, tile)
+    # Two different palette addresses can hold the same colours, which yields
+    # byte-identical images. Reuse a material when both the image and the crop
+    # match, so that the UV mapping stays exact.
     by_content = {}
 
     for k in sorted(bounds, key=lambda x: str(x)):
         tx, ty, cx, cy, tp, twin, op = k
         if twin:
-            # Texture window: the crop IS the tile and the sampler repeats.
+            # With a texture window the crop is the window itself and the
+            # sampler repeats it.
             ox, oy, w, h = twin
             u0, v0, u1, v1, pad, tile = ox, oy, ox + w - 1, oy + h - 1, 0, (w, h)
             label = f'tp{tx}_{ty}_cl{cx}_{cy}_win{ox}_{oy}_{w}x{h}'
@@ -195,9 +181,10 @@ def export_glb(node_list: list, vram, out_path: str,
         crop_of[k] = crop
         by_content[csig] = len(mats) - 1
 
-    # Single shared material for vertex-coloured (untextured) polys.
+    # One shared material for untextured polygons, which carry their colour in
+    # the vertex attribute and only need a white pixel to modulate.
     vc_mat = None
-    if any(not p.has_tex for _n, _polys in node_list for p in _polys):
+    if any(not p.has_tex for _, polys in node_list for p in polys):
         buf = io.BytesIO()
         Image.new('RGBA', (1, 1), (255, 255, 255, 255)).save(buf, 'PNG')
         gimgs.append(GltfImage(bufferView=_add_view(buf.getvalue()),
@@ -211,10 +198,8 @@ def export_glb(node_list: list, vram, out_path: str,
             alphaMode='MASK', alphaCutoff=0.5, doubleSided=True))
         vc_mat = len(mats) - 1
 
-    # -- mesh builder --------------------------------------------------------
-
     def _build_prims(polys: list, opaque: bool = False) -> list:
-        """Convert a list of Poly objects into a list of GLB Primitive objects."""
+        """Convert a list of Poly objects into a list of GLB primitives."""
         groups = defaultdict(list)
         for p in polys:
             groups[_mat_key(p, opaque) if p.has_tex else None].append(p)
@@ -224,9 +209,13 @@ def export_glb(node_list: list, vram, out_path: str,
         def _flush(group: list, mid: int,
                    u_off: int, v_off: int, tw: int, th: int,
                    tile: tuple = None):
-            # tile = (w, h) when the polys wrap inside a texture window.  UVs
-            # are then emitted in tile units (values above 1 are intended) and
-            # the sampler repeats, reproducing the PS1 wrap.
+            """
+            Emit one primitive for a group of polygons sharing a material.
+
+            When tile is set the polygons wrap inside a texture window, so UVs
+            are written in tile units and values above 1 are expected; the
+            repeating sampler turns them back into a wrap.
+            """
             cache = {}
             pos_list, uv_list, col_list, idx_list = [], [], [], []
 
@@ -280,8 +269,6 @@ def export_glb(node_list: list, vram, out_path: str,
             _flush(grp, mat_of[k], uo, vo, tw, th, tile)
 
         return prims
-
-    # -- assemble scene ------------------------------------------------------
 
     scene_node_indices = []
     for node_idx, (node_name, polys) in enumerate(node_list):
