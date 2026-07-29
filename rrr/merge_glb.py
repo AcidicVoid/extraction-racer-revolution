@@ -1,177 +1,178 @@
 # Merge two GLB files into a single GLB.
 #
-# This combines the binary blobs, materials, textures, meshes, and nodes
-# from two separate GLBs into one output.  Used to merge S2-textured and
-# S3-textured track exports.
+# Used to combine the section-2 and section-3 track exports.  Rather than
+# concatenating the two files and offsetting every index, this rebuilds the
+# output from scratch, which lets identical materials be shared.
+#
+# Materials are deduplicated by CONTENT: two materials merge when their image
+# bytes, sampler and alpha/PBR settings all match.  The two section exports
+# reference the same shared BIG*.TMS pages, so without this the merged file
+# carries two copies of every non-course texture and editing one of them in
+# Blender only changes half the track.
+#
+# Anything not referenced by a surviving primitive is simply never copied, so
+# the merged blob contains no orphaned image or accessor data.
 
+import hashlib
 from pathlib import Path
-from pygltflib import GLTF2, Scene, Node, Mesh, Primitive, Buffer, \
-    BufferView, Accessor, Material, Texture, Sampler, Image as GImage
+
+from pygltflib import (GLTF2, Scene, Node, Mesh, Primitive, Buffer, BufferView,
+                       Accessor, Material, Texture, Sampler, Attributes,
+                       Image as GImage, PbrMetallicRoughness, TextureInfo,
+                       ARRAY_BUFFER, ELEMENT_ARRAY_BUFFER, TRIANGLES)
+
+# glTF componentType -> bytes per component
+_CSIZE = {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}
+_NCOMP = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}
+
+_ATTRS = ('POSITION', 'NORMAL', 'TANGENT', 'TEXCOORD_0', 'TEXCOORD_1',
+          'COLOR_0', 'JOINTS_0', 'WEIGHTS_0')
 
 
 def merge_glb(path_a: str, path_b: str, out_path: str):
     """
     Merge two GLB files into a single GLB at out_path.
 
-    All nodes from both files appear in the output scene.
-    Buffer data is concatenated; all indices in file B are offset
-    by the counts from file A.
+    All nodes from both files appear in the output scene.  Materials that are
+    byte-for-byte equivalent are collapsed into one.
     """
-    a = GLTF2.load(path_a)
-    b = GLTF2.load(path_b)
+    srcs = [(GLTF2.load(p)) for p in (path_a, path_b)]
 
-    blob_a = bytearray(a.binary_blob() or b'')
-    blob_b = bytearray(b.binary_blob() or b'')
+    blob = bytearray()
+    bviews, accs = [], []
+    mats, texs, imgs, samps = [], [], [], []
+    meshes, nodes = [], []
 
-    # Pad blob_a to 4-byte alignment before appending blob_b.
-    while len(blob_a) % 4:
-        blob_a.append(0)
-    blob_b_offset = len(blob_a)
+    sampler_map = {}
+    mat_map = {}
 
-    merged_blob = blob_a + blob_b
+    def add_view(raw: bytes, target=None) -> int:
+        off = len(blob)
+        blob.extend(raw)
+        while len(blob) % 4:
+            blob.append(0)
+        bv = BufferView(buffer=0, byteOffset=off, byteLength=len(raw))
+        if target:
+            bv.target = target
+        bviews.append(bv)
+        return len(bviews) - 1
 
-    # Count offsets for index remapping.
-    n_bv  = len(a.bufferViews  or [])
-    n_acc = len(a.accessors     or [])
-    n_mat = len(a.materials     or [])
-    n_tex = len(a.textures      or [])
-    n_img = len(a.images        or [])
-    n_smp = len(a.samplers      or [])
-    n_msh = len(a.meshes        or [])
-    n_nod = len(a.nodes         or [])
+    def view_bytes(g, gblob, bv_index):
+        bv = g.bufferViews[bv_index]
+        return bytes(gblob[bv.byteOffset: bv.byteOffset + bv.byteLength])
 
-    # --- Merge buffer views (offset B's byte offsets) ---
-    bviews = list(a.bufferViews or [])
-    for bv in (b.bufferViews or []):
-        new_bv = BufferView(
-            buffer=0,
-            byteOffset=bv.byteOffset + blob_b_offset,
-            byteLength=bv.byteLength,
-        )
-        if bv.target is not None:
-            new_bv.target = bv.target
-        if bv.byteStride is not None:
-            new_bv.byteStride = bv.byteStride
-        bviews.append(new_bv)
+    def copy_accessor(g, gblob, idx, target):
+        a = g.accessors[idx]
+        bv = g.bufferViews[a.bufferView]
+        start = bv.byteOffset + (a.byteOffset or 0)
+        nbytes = a.count * _NCOMP[a.type] * _CSIZE[a.componentType]
+        raw = bytes(gblob[start: start + nbytes])
+        na = Accessor(bufferView=add_view(raw, target), byteOffset=0,
+                      componentType=a.componentType, count=a.count, type=a.type)
+        if a.min is not None:
+            na.min = list(a.min)
+        if a.max is not None:
+            na.max = list(a.max)
+        accs.append(na)
+        return len(accs) - 1
 
-    # --- Merge accessors (offset B's bufferView indices) ---
-    accs = list(a.accessors or [])
-    for ac in (b.accessors or []):
-        new_ac = Accessor(
-            bufferView=ac.bufferView + n_bv if ac.bufferView is not None else None,
-            componentType=ac.componentType,
-            type=ac.type,
-            count=ac.count,
-        )
-        if ac.byteOffset is not None:
-            new_ac.byteOffset = ac.byteOffset
-        if ac.min is not None:
-            new_ac.min = ac.min
-        if ac.max is not None:
-            new_ac.max = ac.max
-        accs.append(new_ac)
+    def get_sampler(g, tex):
+        if tex.sampler is None:
+            return None
+        s = g.samplers[tex.sampler]
+        key = (s.magFilter, s.minFilter, s.wrapS, s.wrapT)
+        if key not in sampler_map:
+            samps.append(Sampler(magFilter=s.magFilter, minFilter=s.minFilter,
+                                 wrapS=s.wrapS, wrapT=s.wrapT))
+            sampler_map[key] = len(samps) - 1
+        return sampler_map[key]
 
-    # --- Merge images (offset B's bufferView indices) ---
-    imgs = list(a.images or [])
-    for im in (b.images or []):
-        new_im = GImage(
-            bufferView=im.bufferView + n_bv if im.bufferView is not None else None,
-            mimeType=im.mimeType,
-        )
-        if im.uri is not None:
-            new_im.uri = im.uri
-        if im.name is not None:
-            new_im.name = im.name
-        imgs.append(new_im)
+    def get_material(g, gblob, idx):
+        m = g.materials[idx]
+        pbr = m.pbrMetallicRoughness
+        tex_idx = None
+        if pbr is not None and pbr.baseColorTexture is not None:
+            tex_idx = pbr.baseColorTexture.index
 
-    # --- Merge samplers ---
-    samps = list(a.samplers or [])
-    samps.extend(b.samplers or [])
+        img_bytes = b''
+        skey = None
+        mime = 'image/png'
+        if tex_idx is not None:
+            tex = g.textures[tex_idx]
+            img = g.images[tex.source]
+            img_bytes = view_bytes(g, gblob, img.bufferView)
+            mime = img.mimeType or 'image/png'
+            s = g.samplers[tex.sampler] if tex.sampler is not None else None
+            skey = (s.magFilter, s.minFilter, s.wrapS, s.wrapT) if s else None
 
-    # --- Merge textures (offset B's source/sampler indices) ---
-    texs = list(a.textures or [])
-    for tx in (b.textures or []):
-        new_tx = Texture(
-            source=tx.source + n_img if tx.source is not None else None,
-            sampler=tx.sampler + n_smp if tx.sampler is not None else None,
-        )
-        texs.append(new_tx)
+        sig = (hashlib.sha1(img_bytes).digest(), skey, m.alphaMode,
+               m.alphaCutoff, m.doubleSided,
+               None if pbr is None else pbr.metallicFactor,
+               None if pbr is None else pbr.roughnessFactor,
+               None if pbr is None else (tuple(pbr.baseColorFactor)
+                                         if pbr.baseColorFactor else None))
+        if sig in mat_map:
+            return mat_map[sig]
 
-    # --- Merge materials (offset B's texture indices in PBR) ---
-    mats = list(a.materials or [])
-    for mt in (b.materials or []):
-        # Deep-copy the material and offset texture indices.
-        new_mt = Material()
-        new_mt.name = mt.name
-        new_mt.doubleSided = mt.doubleSided
-        new_mt.alphaMode = mt.alphaMode
-        new_mt.alphaCutoff = mt.alphaCutoff
+        new_pbr = PbrMetallicRoughness()
+        if pbr is not None:
+            if pbr.baseColorFactor is not None:
+                new_pbr.baseColorFactor = list(pbr.baseColorFactor)
+            new_pbr.metallicFactor = pbr.metallicFactor
+            new_pbr.roughnessFactor = pbr.roughnessFactor
+        if tex_idx is not None:
+            si = get_sampler(g, g.textures[tex_idx])
+            imgs.append(GImage(bufferView=add_view(img_bytes), mimeType=mime))
+            texs.append(Texture(sampler=si, source=len(imgs) - 1))
+            new_pbr.baseColorTexture = TextureInfo(index=len(texs) - 1)
+        nm = Material(name=m.name, pbrMetallicRoughness=new_pbr,
+                      alphaMode=m.alphaMode, alphaCutoff=m.alphaCutoff,
+                      doubleSided=m.doubleSided)
+        mats.append(nm)
+        mat_map[sig] = len(mats) - 1
+        return mat_map[sig]
 
-        if mt.pbrMetallicRoughness is not None:
-            from pygltflib import PbrMetallicRoughness, TextureInfo
-            src = mt.pbrMetallicRoughness
-            new_pbr = PbrMetallicRoughness()
-            if src.baseColorFactor is not None:
-                new_pbr.baseColorFactor = src.baseColorFactor
-            new_pbr.metallicFactor = src.metallicFactor
-            new_pbr.roughnessFactor = src.roughnessFactor
-            if src.baseColorTexture is not None:
-                idx = src.baseColorTexture.index
-                new_bct = TextureInfo(index=idx + n_tex if idx is not None else None)
-                if src.baseColorTexture.texCoord is not None:
-                    new_bct.texCoord = src.baseColorTexture.texCoord
-                new_pbr.baseColorTexture = new_bct
-            new_mt.pbrMetallicRoughness = new_pbr
-        mats.append(new_mt)
+    for g in srcs:
+        gblob = g.binary_blob() or b''
+        for mesh in (g.meshes or []):
+            prims = []
+            for pr in (mesh.primitives or []):
+                new_attrs = Attributes()
+                for an in _ATTRS:
+                    ai = getattr(pr.attributes, an, None)
+                    if ai is None:
+                        continue
+                    setattr(new_attrs, an,
+                            copy_accessor(g, gblob, ai, ARRAY_BUFFER))
+                ii = (copy_accessor(g, gblob, pr.indices, ELEMENT_ARRAY_BUFFER)
+                      if pr.indices is not None else None)
+                mid = (get_material(g, gblob, pr.material)
+                       if pr.material is not None else None)
+                prims.append(Primitive(attributes=new_attrs, indices=ii,
+                                       material=mid,
+                                       mode=pr.mode if pr.mode is not None
+                                       else TRIANGLES))
+            if not prims:
+                continue
+            meshes.append(Mesh(name=mesh.name, primitives=prims))
+            nodes.append(Node(name=mesh.name, mesh=len(meshes) - 1))
 
-    # --- Merge meshes (offset B's accessor/material indices in primitives) ---
-    meshes = list(a.meshes or [])
-    for msh in (b.meshes or []):
-        new_prims = []
-        for p in (msh.primitives or []):
-            from pygltflib import Attributes
-            src_attrs = p.attributes
-            new_attrs = Attributes()
-            for attr_name in ['POSITION', 'NORMAL', 'TEXCOORD_0', 'COLOR_0']:
-                val = getattr(src_attrs, attr_name, None)
-                if val is not None:
-                    setattr(new_attrs, attr_name, val + n_acc)
-            new_p = Primitive(
-                attributes=new_attrs,
-                indices=p.indices + n_acc if p.indices is not None else None,
-                material=p.material + n_mat if p.material is not None else None,
-            )
-            new_prims.append(new_p)
-        new_msh = Mesh(name=msh.name, primitives=new_prims)
-        meshes.append(new_msh)
-
-    # --- Merge nodes (offset B's mesh indices) ---
-    nodes = list(a.nodes or [])
-    for nd in (b.nodes or []):
-        new_nd = Node(
-            name=nd.name,
-            mesh=nd.mesh + n_msh if nd.mesh is not None else None,
-        )
-        nodes.append(new_nd)
-
-    # --- Build combined scene with all nodes ---
-    all_node_indices = list(range(len(nodes)))
-
-    # --- Assemble output ---
     out = GLTF2()
-    out.bufferViews = bviews
-    out.accessors = accs
-    out.images = imgs
-    out.samplers = samps
-    out.textures = texs
-    out.materials = mats
+    out.asset = srcs[0].asset
     out.meshes = meshes
     out.nodes = nodes
-    out.scenes = [Scene(nodes=all_node_indices)]
+    out.scenes = [Scene(nodes=list(range(len(nodes))))]
     out.scene = 0
-    out.buffers = [Buffer(byteLength=len(merged_blob))]
-    out.set_binary_blob(bytes(merged_blob))
+    out.materials = mats
+    out.textures = texs
+    out.images = imgs
+    out.samplers = samps
+    out.bufferViews = bviews
+    out.accessors = accs
+    out.buffers = [Buffer(byteLength=len(blob))]
+    out.set_binary_blob(bytes(blob))
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     out.save_binary(out_path)
-    print(f'  -> {Path(out_path).name}  (merged: {len(nodes)} nodes)')
+    print(f'  -> {Path(out_path).name}  (merged: {len(nodes)} nodes, '
+          f'{len(mats)} materials)')

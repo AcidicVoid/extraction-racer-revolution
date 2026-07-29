@@ -1,9 +1,17 @@
 # GLB export for PS1 polygon data.
 #
 # All geometry is stored as quads (4 verts), split into two triangles on export.
-# Each unique (TPAGE, CLUT) combination becomes one GLB material with a cropped
-# texture atlas extracted from VRAM.  Vertex-colored polys (CMD2/CMD5) share a
+#
+# Materials are shared across the whole file: one material per distinct
+# (TPAGE, CLUT, mode, texture window, alpha), built once and referenced by every
+# mesh that uses it, so editing one texture in Blender affects everywhere it is
+# used.  The UV crop for each material is the union over the entire export, so
+# sharing does not inflate the image.  Vertex-colored polys (CMD2/CMD5) share a
 # single white-texture material and rely on the COLOR_0 vertex attribute.
+#
+# Polys carrying a PS1 texture window (CMD 1 / CMD 4) get the window rectangle
+# as their image, UVs in tile units, and a repeating sampler -- see
+# displaylist.py for the window semantics.
 #
 # Coordinate conversion from PS1 to glTF (Y-up right-hand):
 #   glTF X =  world_X * scale
@@ -14,6 +22,7 @@
 #   Cars / props:   1/256  (model units -> reasonable glTF meters)
 #   Track geometry: 1/256  (world units in the 2000-60000 range -> 8-235 m)
 
+import hashlib
 import io
 from collections import defaultdict
 from pathlib import Path
@@ -43,66 +52,6 @@ def _white_png() -> bytes:
     return buf.getvalue()
 
 
-def _cluster_by_uv(polys: list, gap: int = 4) -> list:
-    """
-    Split a (TPAGE, CLUT, mode) group into clusters of polys whose UV rects
-    overlap or nearly touch.
-
-    Taking one union bounding box for the whole group is wrong when a model
-    samples several widely-separated regions of the same texture page: the
-    resulting crop is a large slab of the page holding many unrelated
-    textures, i.e. a texture atlas gets baked onto the object.  That happens
-    whenever CMD 0 and CMD 1 polys of one model share a page and CLUT --
-    CMD 1 quads routinely sample far-away parts of the page.
-
-    Clustering keeps the crop tight around each actual texture while still
-    letting polys that genuinely share one texture share one material, so the
-    material count stays far below one-material-per-polygon.
-
-    *gap* is the slack in texels; it should be at least the pad used when
-    extracting, so neighbouring rects that the pad would merge anyway end up
-    in the same cluster.
-    """
-    n = len(polys)
-    if n < 2:
-        return [polys] if polys else []
-
-    rects = []
-    for p in polys:
-        us = [u for u, v in p.uvs]
-        vs = [v for u, v in p.uvs]
-        rects.append((min(us), min(vs), max(us), max(vs)))
-
-    parent = list(range(n))
-
-    def find(a):
-        while parent[a] != a:
-            parent[a] = parent[parent[a]]
-            a = parent[a]
-        return a
-
-    def merge(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
-
-    # Sort by u0 so we can stop scanning once rects are out of reach.
-    order = sorted(range(n), key=lambda i: rects[i][0])
-    for oi in range(n):
-        i = order[oi]
-        au0, av0, au1, av1 = rects[i]
-        for oj in range(oi + 1, n):
-            j = order[oj]
-            bu0, bv0, bu1, bv1 = rects[j]
-            if bu0 - gap > au1:
-                break            # sorted by u0: nothing further can overlap
-            if av0 - gap <= bv1 and bv0 - gap <= av1:
-                merge(i, j)
-
-    groups = {}
-    for i, p in enumerate(polys):
-        groups.setdefault(find(i), []).append(p)
-    return list(groups.values())
 
 
 def export_glb(node_list: list, vram, out_path: str,
@@ -158,49 +107,126 @@ def export_glb(node_list: list, vram, out_path: str,
         accs.append(a)
         return len(accs) - 1
 
+    # -- shared material table -----------------------------------------------
+    #
+    # One material per distinct (TPAGE, CLUT, mode, texture window, alpha),
+    # built once and referenced by every mesh that uses it.  Previously each
+    # mesh created its own image + texture + material, so a texture used by
+    # 200 road segments appeared 200 times and editing it in Blender had to be
+    # repeated 200 times.  The UV crop is the union over the WHOLE export, not
+    # per mesh, so a shared material still gets a tight image.
+
+    def _mat_key(p, opaque):
+        return (p.tpage_x, p.tpage_y, p.clut_x, p.clut_y,
+                p.mode, p.twin, bool(opaque))
+
+    bounds = {}
+    for _i, (_n, _polys) in enumerate(node_list):
+        _op = road_opaque and _i == 0
+        for p in _polys:
+            if not p.has_tex:
+                continue
+            k = _mat_key(p, _op)
+            us = [u for u, v in p.uvs]
+            vs = [v for u, v in p.uvs]
+            b = bounds.get(k)
+            if b is None:
+                bounds[k] = [min(us), min(vs), max(us), max(vs)]
+            else:
+                b[0] = min(b[0], min(us)); b[1] = min(b[1], min(vs))
+                b[2] = max(b[2], max(us)); b[3] = max(b[3], max(vs))
+
+    mat_of = {}     # key -> material index
+    crop_of = {}    # key -> (u_off, v_off, tex_w, tex_h, tile)
+    # Distinct CLUT addresses often hold identical palettes, so different keys
+    # can produce byte-identical images.  Reuse the material when the image
+    # AND the UV crop match, which keeps the mapping exact.
+    by_content = {}
+
+    for k in sorted(bounds, key=lambda x: str(x)):
+        tx, ty, cx, cy, tp, twin, op = k
+        if twin:
+            # Texture window: the crop IS the tile and the sampler repeats.
+            ox, oy, w, h = twin
+            u0, v0, u1, v1, pad, tile = ox, oy, ox + w - 1, oy + h - 1, 0, (w, h)
+            label = f'tp{tx}_{ty}_cl{cx}_{cy}_win{ox}_{oy}_{w}x{h}'
+        else:
+            u0, v0, u1, v1 = bounds[k]
+            u0 = max(0, u0); v0 = max(0, v0)
+            u1 = min(255, u1); v1 = min(255, v1)
+            if u1 <= u0:
+                u1 = u0 + 1
+            if v1 <= v0:
+                v1 = v0 + 1
+            pad, tile = 2, None
+            label = f'tp{tx}_{ty}_cl{cx}_{cy}'
+        if op:
+            label += '_opaque'
+        try:
+            img, uo, vo = vram.extract_texture(
+                tx, ty, cx, cy, tp, u0, v0, u1, v1, pad=pad)
+        except Exception:
+            img = Image.new('RGBA', (4, 4), _PINK)
+            uo = vo = 0
+        buf = io.BytesIO()
+        img.save(buf, 'PNG')
+        png = buf.getvalue()
+        crop = (uo, vo, max(img.width, 1), max(img.height, 1), tile)
+        alpha = 'OPAQUE' if op else 'MASK'
+
+        csig = (hashlib.sha1(png).digest(), crop, alpha)
+        if csig in by_content:
+            mat_of[k] = by_content[csig]
+            crop_of[k] = crop
+            continue
+
+        gimgs.append(GltfImage(bufferView=_add_view(png),
+                               mimeType='image/png'))
+        gtexs.append(Texture(sampler=1 if tile else 0, source=len(gimgs) - 1))
+        mats.append(Material(
+            name=label,
+            pbrMetallicRoughness=PbrMetallicRoughness(
+                baseColorTexture=TextureInfo(index=len(gtexs) - 1),
+                metallicFactor=0.0, roughnessFactor=1.0),
+            alphaMode=alpha,
+            alphaCutoff=0.5 if alpha == 'MASK' else None,
+            doubleSided=True))
+        mat_of[k] = len(mats) - 1
+        crop_of[k] = crop
+        by_content[csig] = len(mats) - 1
+
+    # Single shared material for vertex-coloured (untextured) polys.
+    vc_mat = None
+    if any(not p.has_tex for _n, _polys in node_list for p in _polys):
+        buf = io.BytesIO()
+        Image.new('RGBA', (1, 1), (255, 255, 255, 255)).save(buf, 'PNG')
+        gimgs.append(GltfImage(bufferView=_add_view(buf.getvalue()),
+                               mimeType='image/png'))
+        gtexs.append(Texture(sampler=0, source=len(gimgs) - 1))
+        mats.append(Material(
+            name='vertex_colors',
+            pbrMetallicRoughness=PbrMetallicRoughness(
+                baseColorTexture=TextureInfo(index=len(gtexs) - 1),
+                metallicFactor=0.0, roughnessFactor=1.0),
+            alphaMode='MASK', alphaCutoff=0.5, doubleSided=True))
+        vc_mat = len(mats) - 1
+
     # -- mesh builder --------------------------------------------------------
 
     def _build_prims(polys: list, opaque: bool = False) -> list:
         """Convert a list of Poly objects into a list of GLB Primitive objects."""
-        tex_groups = defaultdict(list)
-        col_polys = []
+        groups = defaultdict(list)
         for p in polys:
-            if p.has_tex:
-                # The texture window is part of the material identity: polys
-                # sharing a page and CLUT but wrapping inside different
-                # windows need different tiles.
-                tex_groups[(p.tpage_x, p.tpage_y,
-                            p.clut_x,  p.clut_y, p.mode, p.twin)].append(p)
-            else:
-                col_polys.append(p)
+            groups[_mat_key(p, opaque) if p.has_tex else None].append(p)
 
         prims = []
-        alpha = 'OPAQUE' if opaque else 'MASK'
 
-        def _flush(group: list, img: Image.Image,
-                   u_off: int, v_off: int, mat_name: str,
+        def _flush(group: list, mid: int,
+                   u_off: int, v_off: int, tw: int, th: int,
                    tile: tuple = None):
             # tile = (w, h) when the polys wrap inside a texture window.  UVs
             # are then emitted in tile units (values above 1 are intended) and
             # the sampler repeats, reproducing the PS1 wrap.
-            tw = max(img.width, 1)
-            th = max(img.height, 1)
-            buf = io.BytesIO()
-            img.save(buf, 'PNG')
-            gimgs.append(GltfImage(bufferView=_add_view(buf.getvalue()),
-                                   mimeType='image/png'))
-            gtexs.append(Texture(sampler=1 if tile else 0,
-                                 source=len(gimgs) - 1))
-            mats.append(Material(
-                name=mat_name,
-                pbrMetallicRoughness=PbrMetallicRoughness(
-                    baseColorTexture=TextureInfo(index=len(gtexs) - 1),
-                    metallicFactor=0.0, roughnessFactor=1.0),
-                alphaMode=alpha,
-                alphaCutoff=0.5 if alpha == 'MASK' else None,
-                doubleSided=True))
-            mid = len(mats) - 1
-
             cache = {}
             pos_list, uv_list, col_list, idx_list = [], [], [], []
 
@@ -244,49 +270,14 @@ def export_glb(node_list: list, vram, out_path: str,
                     POSITION=ap, TEXCOORD_0=au, COLOR_0=ac),
                 indices=ai, material=mid, mode=TRIANGLES))
 
-        for (tx, ty, cx, cy, tp, twin), grp in sorted(
-                tex_groups.items(), key=lambda kv: str(kv[0])):
-
-            # Texture-window polys: extract exactly the window and let the
-            # sampler repeat it.  No UV clustering -- the tile is the crop.
-            if twin:
-                ox, oy, w, h = twin
-                try:
-                    img, uo, vo = vram.extract_texture(
-                        tx, ty, cx, cy, tp,
-                        ox, oy, ox + w - 1, oy + h - 1, pad=0)
-                except Exception:
-                    img = Image.new('RGBA', (max(w, 1), max(h, 1)), _PINK)
-                    uo, vo = ox, oy
-                _flush(grp, img, uo, vo,
-                       f'tp{tx}_{ty}_cl{cx}_{cy}_win{ox}_{oy}_{w}x{h}',
-                       tile=(w, h))
+        for k in sorted(groups, key=lambda x: str(x)):
+            grp = groups[k]
+            if k is None:
+                if vc_mat is not None:
+                    _flush(grp, vc_mat, 0, 0, 1, 1)
                 continue
-
-            # One material per cluster of touching UV rects, not one per
-            # (TPAGE, CLUT) union -- see _cluster_by_uv.
-            for ci, cluster in enumerate(_cluster_by_uv(grp, gap=4)):
-                uvs = [uv for p in cluster for uv in p.uvs]
-                u0 = max(0,   min(u for u, v in uvs))
-                u1 = min(255, max(u for u, v in uvs))
-                v0 = max(0,   min(v for u, v in uvs))
-                v1 = min(255, max(v for u, v in uvs))
-                if u1 <= u0:
-                    u1 = u0 + 1
-                if v1 <= v0:
-                    v1 = v0 + 1
-                try:
-                    img, uo, vo = vram.extract_texture(
-                        tx, ty, cx, cy, tp, u0, v0, u1, v1, pad=2)
-                except Exception:
-                    img = Image.new('RGBA', (4, 4), _PINK)
-                    uo = vo = 0
-                _flush(cluster, img, uo, vo,
-                       f'tp{tx}_{ty}_cl{cx}_{cy}_{ci}')
-
-        if col_polys:
-            white = Image.new('RGBA', (1, 1), (255, 255, 255, 255))
-            _flush(col_polys, white, 0, 0, 'vertex_colors')
+            uo, vo, tw, th, tile = crop_of[k]
+            _flush(grp, mat_of[k], uo, vo, tw, th, tile)
 
         return prims
 
