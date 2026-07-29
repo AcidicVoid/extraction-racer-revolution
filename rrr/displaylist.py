@@ -79,6 +79,7 @@ class Poly:
     mode: int = 0        # texture mode: 0=4bpp 1=8bpp 2=15bpp
     has_tex: bool = True
     color: tuple = (128, 128, 128)   # fallback RGB for untextured polys
+    twin: tuple = None   # texture window (off_x, off_y, w, h) or None
 
 
 def _decode_tpage(t: int) -> tuple:
@@ -127,7 +128,24 @@ def _parse_record(rec: bytes, cmd: int, colored_cmds: frozenset) -> Poly:
     # Textured.  CMD 3 puts UVs at offset 48; everything else at 24.
     base = 48 if cmd == 3 else 24
     uvs, tx, ty, cx, cy, tp = _parse_tex(rec, base)
-    return Poly(verts, uvs, tx, ty, cx, cy, tp, True)
+
+    # CMD 1 and CMD 4 carry 8 trailing bytes holding the PS1 texture window:
+    # four u16 giving (offset_x, offset_y, width, height) in texels.  The GPU
+    # wraps texture coordinates inside that window, so a quad whose U runs to
+    # 252 with a 64-wide window tiles a 64-pixel texture four times rather
+    # than stretching a quarter of the page across the face.
+    # Verified over all 1823 CMD 1/4 records in the five courses: width and
+    # height are always powers of two, the offsets are always exact multiples
+    # of them, and the window always lies inside the 256x256 page.
+    twin = None
+    if cmd in (1, 4):
+        wbase = 40 if cmd == 1 else 64
+        if len(rec) >= wbase + 8:
+            ox, oy, w, h = struct.unpack_from('<4H', rec, wbase)
+            if w and h and ox + w <= 256 and oy + h <= 256:
+                twin = (ox, oy, w, h)
+
+    return Poly(verts, uvs, tx, ty, cx, cy, tp, True, twin=twin)
 
 
 def _parse_display_list_impl(data: bytes, stride_table: dict,

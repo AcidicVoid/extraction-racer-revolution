@@ -270,7 +270,7 @@ def _parse_road_segments(data):
                 wv, p.uvs,
                 p.tpage_x, p.tpage_y,
                 p.clut_x, p.clut_y,
-                p.mode, p.has_tex, p.color))
+                p.mode, p.has_tex, p.color, p.twin))
 
         name = f'road_seg{seg_idx:03d}_t{tile_col:02d}x{tile_row:02d}'
         road_nodes.append((name, world_polys))
@@ -363,7 +363,7 @@ def parse_crs(data):
             placed.append(Poly(new_verts, p.uvs,
                                p.tpage_x, p.tpage_y,
                                p.clut_x, p.clut_y,
-                               p.mode, p.has_tex, p.color))
+                               p.mode, p.has_tex, p.color, p.twin))
         if placed:
             named_placements.append((f'obj{i:03d}_s{midx:03d}', placed))
 

@@ -36,7 +36,7 @@ def _offset_polys(polys: list, dx: int, dz: int) -> list:
     return [
         Poly([(v[0] + dx, v[1], v[2] + dz) for v in p.verts],
              p.uvs, p.tpage_x, p.tpage_y,
-             p.clut_x, p.clut_y, p.mode, p.has_tex, p.color)
+             p.clut_x, p.clut_y, p.mode, p.has_tex, p.color, p.twin)
         for p in polys
     ]
 
