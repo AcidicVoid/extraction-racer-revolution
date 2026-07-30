@@ -311,13 +311,22 @@ Sequence of upload records, terminated by a size-0 record.
 | +0x0A  | u16  | Height (rows)                                 |
 | +0x0C  | ...  | Raw ABGR1555 data                             |
 
-Structurally the next record begins at `pos + 12 + size`, and walking a
-`*_PCT.DAT` that way yields three records: the palette row at (0, 494), a
-320x256 block at (320, 256) and a 256x256 block at (768, 0). **Only the first
-is uploaded.** The game's loader advances by `size` alone, so it lands inside
-the first record's payload, reads a header the GPU discards, and stops. A VRAM
-dump confirms the last two blocks never reach VRAM, so the extractor also
-loads only the first record. `*_CT.DAT` contains the palette row only.
+The next record begins at `pos + 12 + size`. Each `*_PCT.DAT` holds three:
+
+| VRAM       | Size    | Contents                                            |
+|------------|---------|-----------------------------------------------------|
+| (0, 494)   | 256x18  | palette row                                         |
+| (320, 256) | 320x256 | course-specific replacement for part of BIG0/BIG3/BIG4 |
+| (768, 0)   | 256x256 | course-specific replacement for part of BIG1/BIG2   |
+
+All three are uploaded. The last two overwrite roughly 7 percent of the shared
+pages with course-specific art, and how much geometry depends on them varies
+sharply by course: none of CRS_EASY, about 5 percent of CRS_MID and CRS_HIGH,
+and nearly half of CRS_OLDE and CRS_OLDH. Skipping them leaves those polygons
+sampling unrelated art from the shared pages.
+
+`*_CT.DAT` holds the palette row only and is loaded after the PCT file so its
+palette wins.
 
 **Per-course load order** (PCT first, CT last - last write wins in VRAM):
 

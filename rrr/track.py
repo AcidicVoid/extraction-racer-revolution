@@ -78,7 +78,23 @@
 #   [u32 size][u16 vram_x][u16 vram_y][u16 w][u16 h][raw halfword data]
 #
 # size is the payload size, equal to w * h * 2, and excludes the 12-byte
-# header. Only the first record is uploaded; see load_course_textures.
+# header, so the next record starts at pos + 12 + size.
+#
+# Each *_PCT.DAT holds three records:
+#
+#   (0, 494)   256x18    the palette row
+#   (320, 256) 320x256   course-specific replacement for part of the shared
+#                        BIG0/BIG3/BIG4 region
+#   (768, 0)   256x256   course-specific replacement for part of the shared
+#                        BIG1/BIG2 region
+#
+# All three must be uploaded. The last two replace roughly 7 percent of the
+# shared pages with course-specific art, and the amount of geometry that
+# depends on them varies enormously per course: none of CRS_EASY, about 5
+# percent of CRS_MID and CRS_HIGH, and nearly half of CRS_OLDE and CRS_OLDH.
+#
+# *_CT.DAT holds the palette row only, and is loaded after the PCT file so
+# that its palette wins.
 #
 # Load order per course, last write wins:
 #
@@ -151,10 +167,8 @@ def load_course_textures(crs_data, vram, clut_files=None, section=2):
     section selects which of the two course textures to use, 2 or 3. Both are
     384 by 256 halfwords and both go to VRAM (640, 256).
 
-    Only the first record of each palette file is uploaded. Later records are
-    present in the file but the game's loader advances by the payload size
-    rather than payload plus header, so it never reaches them; uploading them
-    makes the extracted textures disagree with real VRAM.
+    Every record of every palette file is uploaded, in file order, so later
+    records overwrite earlier ones.
     """
     sec = struct.unpack_from('<6I', crs_data, 0)
     if section == 3:
@@ -169,16 +183,29 @@ def load_course_textures(crs_data, vram, clut_files=None, section=2):
         print(f'  course textures: unexpected size {len(raw)} (expected {expected})')
 
     for clut_data in (clut_files or []):
-        if len(clut_data) < 12:
-            continue
-        sz = struct.unpack_from('<I', clut_data, 0)[0]
-        x = struct.unpack_from('<H', clut_data, 4)[0]
-        y = struct.unpack_from('<H', clut_data, 6)[0]
-        w = struct.unpack_from('<H', clut_data, 8)[0]
-        h = struct.unpack_from('<H', clut_data, 10)[0]
-        if sz and x < 1024 and y < 512 and w < 2048 and h < 512:
-            vram.load_pct_block(x, y, w, h, clut_data[12: 12 + sz])
-            print(f'  CLUT record {w}x{h} -> VRAM({x},{y})')
+        pos = 0
+        count = 0
+        while pos + 12 <= len(clut_data):
+            sz = struct.unpack_from('<I', clut_data, pos)[0]
+            if sz == 0:
+                break
+            x = struct.unpack_from('<H', clut_data, pos + 4)[0]
+            y = struct.unpack_from('<H', clut_data, pos + 6)[0]
+            w = struct.unpack_from('<H', clut_data, pos + 8)[0]
+            h = struct.unpack_from('<H', clut_data, pos + 10)[0]
+            # A record whose size does not match its dimensions means the walk
+            # has lost sync, so stop rather than upload garbage.
+            if sz != w * h * 2:
+                print(f'  [PCT/CT] record at {pos}: size {sz} does not match '
+                      f'{w}x{h}, stopping')
+                break
+            if x < 1024 and y < 512 and w < 2048 and h < 512:
+                vram.load_pct_block(x, y, w, h,
+                                    clut_data[pos + 12: pos + 12 + sz])
+                count += 1
+            pos += 12 + sz
+        if count:
+            print(f'  palette file: {count} records uploaded')
 
 
 def _parse_road_segments(data):
