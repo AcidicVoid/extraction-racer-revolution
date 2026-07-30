@@ -43,11 +43,18 @@ You can also check via redump: http://redump.org/disc/2731/
 ## Usage
 
 ```bash
-python extract.py  <path/to/game/data>  <output/directory>
+python extract.py  <path/to/game/data>  <output/directory>  [--keep-sections]
 python dump_obj.py <path/to/game/data>  [output.obj]
 ```
 
-`dump_obj.py` writes a plain Wavefront OBJ with no texture dependencies. This is only a debug feature.
+Each track is built as two exports, one per course texture, which are then
+merged into a single file. Those per-section files are intermediate products
+and hold nothing the merged file lacks, so they are discarded by default.
+`--keep-sections` writes them out as `<course>_s2.glb` and `<course>_s3.glb`
+alongside the merged file, which roughly doubles the size of `tracks/`.
+
+`dump_obj.py` writes a plain Wavefront OBJ with no texture dependencies. This
+is only a debug feature.
 
 ---
 
@@ -60,7 +67,6 @@ output/
   car_parts/  - wheels, special vehicles, etc.
   props/      - scenery objects from CAR.RSO that are not cars
   tracks/     - crs_easy.glb, crs_mid.glb, crs_high.glb, crs_olde.glb, crs_oldh.glb
-                plus the _s2 and _s3 intermediates each one is merged from
 ```
 
 ---
@@ -224,6 +230,18 @@ clut_vram_y  = (clut >> 6) & 0x1FF
 
 Five courses: CRS_EASY, CRS_MID, CRS_HIGH, CRS_OLDE, CRS_OLDH.
 
+`CRS_EASY`, `CRS_MID` and `CRS_HIGH` are the Novice, Intermediate and Expert
+courses. `CRS_OLDE` and `CRS_OLDH` are the two courses carried over from the
+first PlayStation Ridge Racer, reachable only in 2P Link mode; they are one
+physical track with two routes and are byte-identical apart from section 5.
+The loader (`FUN_8002db20`) selects them by a 3-bit course index, 0 to 4.
+
+The Extra (reverse) variants are not separate files. Bit 3 of the course
+variable selects the reverse direction and, with it, bank 1 of the texture
+switch table. Both banks yield the same section assignment on every course, so
+an Extra course extracts to exactly the same geometry and textures as the
+normal one.
+
 **Header:** six u32 offsets to sections 0-5.
 
 **Tile grid** (at file offset 0x18): 32x32 array of s16 values.
@@ -328,15 +346,20 @@ sampling unrelated art from the shared pages.
 `*_CT.DAT` holds the palette row only and is loaded after the PCT file so its
 palette wins.
 
-**Per-course load order** (PCT first, CT last - last write wins in VRAM):
+**Per-course palette file:**
 
-| Course   | Files                     |
-|----------|---------------------------|
-| CRS_EASY | EASY_PCT.DAT, EASY_CT.DAT |
-| CRS_MID  | MID_PCT.DAT               |
-| CRS_HIGH | HIGH_PCT.DAT              |
-| CRS_OLDE | OLD_PCT.DAT               |
-| CRS_OLDH | OLD_PCT.DAT               |
+| Course   | File         |
+|----------|--------------|
+| CRS_EASY | EASY_CT.DAT  |
+| CRS_MID  | MID_PCT.DAT  |
+| CRS_HIGH | HIGH_PCT.DAT |
+| CRS_OLDE | OLD_PCT.DAT  |
+| CRS_OLDH | OLD_PCT.DAT  |
+
+CRS_EASY is the only course with its own `*_CT.DAT`, and it uses that in place
+of `EASY_PCT.DAT`. VRAM dumps taken during an EASY race hold the plain
+BIG*.TMS content in the regions `EASY_PCT.DAT` would overwrite, whereas dumps
+from CRS_MID and CRS_HIGH hold their PCT content there.
 
 ---
 
@@ -382,6 +405,7 @@ rrr/
   car.py          - CAR.RSO parser and car selection table
   track.py        - CRS_*.DAT parser (road + object placements)
   glb.py          - GLB export
+  merge_glb.py    - merges the two section exports into one file
 extract.py        - main entry point
 dump_obj.py       - debug geometry export (no textures, plain OBJ)
 requirements.txt

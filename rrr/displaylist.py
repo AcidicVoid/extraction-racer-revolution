@@ -26,8 +26,9 @@
 #   [0..15]  four (s16 X, s16 Y) pairs, one per vertex
 #   [16..23] four s16 Z values, one per vertex
 #
-# Textured records then hold UVs and material words, at offset 24 for every
-# command except 3, which puts them at 48:
+# Textured records then hold UVs and material words. The flat commands put
+# them at offset 24; the gouraud commands 3 and 4 put them at 48, after their
+# 24 bytes of per-vertex colour:
 #
 #   [+0] u8 U0, [+1] u8 V0, [+2..3] u16 CLUT
 #   [+4] u8 U1, [+5] u8 V1, [+6..7] u16 TPAGE
@@ -118,7 +119,9 @@ def _parse_record(rec: bytes, cmd: int, colored_cmds: frozenset) -> Poly:
         color = (w & 0xFF, (w >> 8) & 0xFF, (w >> 16) & 0xFF)
         return Poly(verts, [(0, 0)] * 4, has_tex=False, color=color)
 
-    base = 48 if cmd == 3 else 24
+    # The gouraud commands carry 24 bytes of per-vertex colour between the
+    # geometry and the UV block, so their material data starts at 48.
+    base = 48 if cmd in (3, 4) else 24
     uvs, tx, ty, cx, cy, tp = _parse_tex(rec, base)
 
     # Commands 1 and 4 end with eight bytes holding the PS1 texture window:

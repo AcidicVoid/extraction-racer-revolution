@@ -1,8 +1,11 @@
 # Ridge Racer Revolution asset extractor.
-# Usage: python extract.py <game_data_dir> <output_dir>
+#
+# Usage: python extract.py <game_data_dir> <output_dir> [--keep-sections]
 # Requirements: pip install Pillow numpy pygltflib
 
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from rrr.tms import parse_tms, render_block
@@ -96,7 +99,14 @@ def _export_cars(car_entries: list, vram: VramSim, out: Path):
                    str(folder / f'{eid:03d}_{label}.glb'), scale=1 / 256.0)
 
 
-def extract(game_dir: str, out_dir: str):
+def extract(game_dir: str, out_dir: str, keep_sections: bool = False):
+    """
+    Extract every asset from the game data into out_dir.
+
+    Each track is built as two exports, one per course texture, which are then
+    merged into a single file. Those per-section exports are intermediate
+    products and are discarded unless keep_sections is true.
+    """
     game = Path(game_dir)
     out  = Path(out_dir)
     for sub in ('textures', 'cars', 'car_parts', 'props', 'tracks'):
@@ -172,33 +182,50 @@ def extract(game_dir: str, out_dir: str):
         s2_nodes = [(n, p) for n, p in node_list if sec_map.get(n, 3) == 2]
         s3_nodes = [(n, p) for n, p in node_list if sec_map.get(n, 3) == 3]
 
-        s2_path = str(track_dir / f'{stem}_s2.glb')
-        s3_path = str(track_dir / f'{stem}_s3.glb')
         merged_path = str(track_dir / f'{stem}.glb')
 
-        if s2_nodes:
-            vram.mem[:] = base_vram
-            load_course_textures(crs_data, vram, clut_data_list, section=2)
-            export_glb(s2_nodes, vram, s2_path, scale=1 / 256.0)
+        # The per-section files are inputs to the merge and hold nothing the
+        # merged file lacks, so by default they go to a scratch directory and
+        # are discarded. keep_sections writes them alongside the merged file.
+        with tempfile.TemporaryDirectory() as scratch:
+            section_dir = track_dir if keep_sections else Path(scratch)
+            s2_path = str(section_dir / f'{stem}_s2.glb')
+            s3_path = str(section_dir / f'{stem}_s3.glb')
 
-        if s3_nodes:
-            vram.mem[:] = base_vram
-            load_course_textures(crs_data, vram, clut_data_list, section=3)
-            export_glb(s3_nodes, vram, s3_path, scale=1 / 256.0)
+            if s2_nodes:
+                vram.mem[:] = base_vram
+                load_course_textures(crs_data, vram, clut_data_list, section=2)
+                export_glb(s2_nodes, vram, s2_path, scale=1 / 256.0)
 
-        if s2_nodes and s3_nodes:
-            merge_glb(s2_path, s3_path, merged_path)
-            print(f'  merged -> {merged_path}')
-        elif s2_nodes:
-            Path(s2_path).rename(merged_path)
-        elif s3_nodes:
-            Path(s3_path).rename(merged_path)
+            if s3_nodes:
+                vram.mem[:] = base_vram
+                load_course_textures(crs_data, vram, clut_data_list, section=3)
+                export_glb(s3_nodes, vram, s3_path, scale=1 / 256.0)
+
+            if s2_nodes and s3_nodes:
+                merge_glb(s2_path, s3_path, merged_path)
+                print(f'  merged -> {merged_path}')
+            elif s2_nodes or s3_nodes:
+                # Only one section has geometry, so there is nothing to merge.
+                single = s2_path if s2_nodes else s3_path
+                if keep_sections:
+                    shutil.copyfile(single, merged_path)
+                else:
+                    shutil.move(single, merged_path)
 
     print(f'\n=== Done. Output: {out} ===')
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 3:
-        print('Usage: python extract.py <game_data_dir> <output_dir>')
+    args = [a for a in sys.argv[1:] if not a.startswith('-')]
+    flags = {a for a in sys.argv[1:] if a.startswith('-')}
+    unknown = flags - {'--keep-sections'}
+    if len(args) < 2 or unknown:
+        if unknown:
+            print(f'unknown option: {", ".join(sorted(unknown))}')
+        print('Usage: python extract.py <game_data_dir> <output_dir> '
+              '[--keep-sections]')
+        print('  --keep-sections  also write the per-section track exports '
+              'that the merged file is built from')
         sys.exit(0)
-    extract(sys.argv[1], sys.argv[2])
+    extract(args[0], args[1], keep_sections='--keep-sections' in flags)

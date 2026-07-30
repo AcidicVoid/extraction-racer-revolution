@@ -1,0 +1,163 @@
+27 VRAM dump(s) found, 27 identified
+
+CRS_EASY
+  road: 6434 polys in 147 segments (of 147 total)
+  objects: 1770 polys in 105 placements
+    [OK  ] sections 2 and 3 are one texture page each
+    [OK  ] every tile maps to a distinct road segment  147 tiles, 147 segments
+    [OK  ] spine lines up with the tile grid  194/264 nodes on a tile that has road
+    [OK  ] switch points are node aligned and in range  node 95 and node 194
+    [OK  ] transition band is small  6 of 264 nodes
+    [OK  ] section 2 forms one contiguous arc  1 arcs
+  texture switch: bank 0 ref1=node95 ref2=node194 dir=25344  (96 nodes B=256, 162 nodes B=0, 6 in transition)
+  section map: 93 nodes -> S2, 159 nodes -> S3
+    [OK  ] both sections carry geometry  93 nodes on section 2, 159 on section 3
+    [OK  ] the section split is spatially coherent  3/194 adjacent tile pairs differ
+    [OK  ] placement filtering matches the record table  105 exported, 105 distinct records
+  BIG4.TMS: 203 blocks
+  BIG0.TMS: 156 blocks
+  BIG3.TMS: 67 blocks
+  BIG1.TMS: 108 blocks
+  BIG2.TMS: 106 blocks
+  course textures: section 2 384x256 -> VRAM(640,256)
+  palette file: 1 records uploaded
+    [OK  ] all polygons use a valid pixel mode  0 bad
+    [OK  ] no polygon samples outside VRAM  0 outside
+    [OK  ] few polygons sample blank VRAM  52/8204
+  BIG4.TMS: 203 blocks
+  BIG0.TMS: 156 blocks
+  BIG3.TMS: 67 blocks
+  BIG1.TMS: 108 blocks
+  BIG2.TMS: 106 blocks
+  course textures: section 2 384x256 -> VRAM(640,256)
+  palette file: 1 records uploaded
+  course textures: section 3 384x256 -> VRAM(640,256)
+  palette file: 1 records uploaded
+    [OK  ] texture pages match 3 VRAM dump(s)  mean 98.73%, worst 98.54%
+    [OK  ] palettes match the dumps  mean 100.00%
+
+CRS_HIGH
+  road: 7190 polys in 213 segments (of 213 total)
+  objects: 2286 polys in 143 placements
+    [OK  ] sections 2 and 3 are one texture page each
+    [OK  ] every tile maps to a distinct road segment  213 tiles, 213 segments
+    [OK  ] spine lines up with the tile grid  327/418 nodes on a tile that has road
+    [OK  ] switch points are node aligned and in range  node 210 and node 323
+    [OK  ] transition band is small  6 of 418 nodes
+    [OK  ] section 2 forms one contiguous arc  1 arcs
+  texture switch: bank 0 ref1=node210 ref2=node323 dir=28928  (110 nodes B=256, 302 nodes B=0, 6 in transition)
+  section map: 131 nodes -> S2, 225 nodes -> S3
+    [OK  ] both sections carry geometry  131 nodes on section 2, 225 on section 3
+    [OK  ] the section split is spatially coherent  5/268 adjacent tile pairs differ
+    [OK  ] placement filtering matches the record table  143 exported, 143 distinct records
+  BIG4.TMS: 203 blocks
+  BIG0.TMS: 156 blocks
+  BIG3.TMS: 67 blocks
+  BIG1.TMS: 108 blocks
+  BIG2.TMS: 106 blocks
+  course textures: section 2 384x256 -> VRAM(640,256)
+  palette file: 3 records uploaded
+    [OK  ] all polygons use a valid pixel mode  0 bad
+    [OK  ] no polygon samples outside VRAM  0 outside
+    [OK  ] few polygons sample blank VRAM  95/9476
+  BIG4.TMS: 203 blocks
+  BIG0.TMS: 156 blocks
+  BIG3.TMS: 67 blocks
+  BIG1.TMS: 108 blocks
+  BIG2.TMS: 106 blocks
+  course textures: section 2 384x256 -> VRAM(640,256)
+  palette file: 3 records uploaded
+  course textures: section 3 384x256 -> VRAM(640,256)
+  palette file: 3 records uploaded
+    [OK  ] texture pages match 13 VRAM dump(s)  mean 98.90%, worst 98.89%
+    [OK  ] palettes match the dumps  mean 100.00%
+
+CRS_MID
+  road: 6737 polys in 178 segments (of 178 total)
+  objects: 1771 polys in 101 placements
+    [OK  ] sections 2 and 3 are one texture page each
+    [OK  ] every tile maps to a distinct road segment  178 tiles, 178 segments
+    [OK  ] spine lines up with the tile grid  260/383 nodes on a tile that has road
+    [OK  ] switch points are node aligned and in range  node 341 and node 65
+    [OK  ] transition band is small  6 of 383 nodes
+    [OK  ] section 2 forms one contiguous arc  1 arcs
+  texture switch: bank 0 ref1=node341 ref2=node65 dir=27392  (104 nodes B=256, 273 nodes B=0, 6 in transition)
+  section map: 92 nodes -> S2, 187 nodes -> S3
+    [OK  ] both sections carry geometry  92 nodes on section 2, 187 on section 3
+    [OK  ] the section split is spatially coherent  6/222 adjacent tile pairs differ
+    [OK  ] placement filtering matches the record table  101 exported, 101 distinct records
+  BIG4.TMS: 203 blocks
+  BIG0.TMS: 156 blocks
+  BIG3.TMS: 67 blocks
+  BIG1.TMS: 108 blocks
+  BIG2.TMS: 106 blocks
+  course textures: section 2 384x256 -> VRAM(640,256)
+  palette file: 3 records uploaded
+    [OK  ] all polygons use a valid pixel mode  0 bad
+    [OK  ] no polygon samples outside VRAM  0 outside
+    [OK  ] few polygons sample blank VRAM  147/8508
+  BIG4.TMS: 203 blocks
+  BIG0.TMS: 156 blocks
+  BIG3.TMS: 67 blocks
+  BIG1.TMS: 108 blocks
+  BIG2.TMS: 106 blocks
+  course textures: section 2 384x256 -> VRAM(640,256)
+  palette file: 3 records uploaded
+  course textures: section 3 384x256 -> VRAM(640,256)
+  palette file: 3 records uploaded
+    [OK  ] texture pages match 11 VRAM dump(s)  mean 98.74%, worst 98.72%
+    [OK  ] palettes match the dumps  mean 100.00%
+
+CRS_OLDE
+  road: 6737 polys in 258 segments (of 258 total)
+  objects: 2326 polys in 129 placements
+    [OK  ] sections 2 and 3 are one texture page each
+    [OK  ] every tile maps to a distinct road segment  258 tiles, 258 segments
+    [OK  ] spine lines up with the tile grid  235/256 nodes on a tile that has road
+    [OK  ] switch points are node aligned and in range  node 13 and node 104
+    [OK  ] transition band is small  6 of 256 nodes
+    [OK  ] section 2 forms one contiguous arc  1 arcs
+  texture switch: bank 0 ref1=node13 ref2=node104 dir=23296  (88 nodes B=256, 162 nodes B=0, 6 in transition)
+  section map: 193 nodes -> S2, 194 nodes -> S3
+    [OK  ] both sections carry geometry  193 nodes on section 2, 194 on section 3
+    [OK  ] the section split is spatially coherent  18/396 adjacent tile pairs differ
+    [OK  ] placement filtering matches the record table  129 exported, 129 distinct records
+  BIG4.TMS: 203 blocks
+  BIG0.TMS: 156 blocks
+  BIG3.TMS: 67 blocks
+  BIG1.TMS: 108 blocks
+  BIG2.TMS: 106 blocks
+  course textures: section 2 384x256 -> VRAM(640,256)
+  palette file: 3 records uploaded
+    [OK  ] all polygons use a valid pixel mode  0 bad
+    [OK  ] no polygon samples outside VRAM  0 outside
+    [OK  ] few polygons sample blank VRAM  33/8912
+    [ -- ] no VRAM dump for this course, skipped
+
+CRS_OLDH
+  road: 6737 polys in 258 segments (of 258 total)
+  objects: 2326 polys in 129 placements
+    [OK  ] sections 2 and 3 are one texture page each
+    [OK  ] every tile maps to a distinct road segment  258 tiles, 258 segments
+    [OK  ] spine lines up with the tile grid  335/368 nodes on a tile that has road
+    [OK  ] switch points are node aligned and in range  node 13 and node 216
+    [OK  ] transition band is small  6 of 368 nodes
+    [OK  ] section 2 forms one contiguous arc  1 arcs
+  texture switch: bank 0 ref1=node13 ref2=node216 dir=-42240  (200 nodes B=256, 162 nodes B=0, 6 in transition)
+  section map: 229 nodes -> S2, 158 nodes -> S3
+    [OK  ] both sections carry geometry  229 nodes on section 2, 158 on section 3
+    [OK  ] the section split is spatially coherent  7/396 adjacent tile pairs differ
+    [OK  ] placement filtering matches the record table  129 exported, 129 distinct records
+  BIG4.TMS: 203 blocks
+  BIG0.TMS: 156 blocks
+  BIG3.TMS: 67 blocks
+  BIG1.TMS: 108 blocks
+  BIG2.TMS: 106 blocks
+  course textures: section 2 384x256 -> VRAM(640,256)
+  palette file: 3 records uploaded
+    [OK  ] all polygons use a valid pixel mode  0 bad
+    [OK  ] no polygon samples outside VRAM  0 outside
+    [OK  ] few polygons sample blank VRAM  33/8912
+    [ -- ] no VRAM dump for this course, skipped
+
+all checks passed

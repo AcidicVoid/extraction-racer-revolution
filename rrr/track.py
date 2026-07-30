@@ -88,21 +88,13 @@
 #   (768, 0)   256x256   course-specific replacement for part of the shared
 #                        BIG1/BIG2 region
 #
-# All three must be uploaded. The last two replace roughly 7 percent of the
+# All records are uploaded. The last two replace roughly 7 percent of the
 # shared pages with course-specific art, and the amount of geometry that
 # depends on them varies enormously per course: none of CRS_EASY, about 5
 # percent of CRS_MID and CRS_HIGH, and nearly half of CRS_OLDE and CRS_OLDH.
 #
-# *_CT.DAT holds the palette row only, and is loaded after the PCT file so
-# that its palette wins.
-#
-# Load order per course, last write wins:
-#
-#   CRS_EASY  EASY_PCT.DAT then EASY_CT.DAT
-#   CRS_MID   MID_PCT.DAT
-#   CRS_HIGH  HIGH_PCT.DAT
-#   CRS_OLDE  OLD_PCT.DAT
-#   CRS_OLDH  OLD_PCT.DAT
+# *_CT.DAT holds the palette row only. CRS_EASY uses it in place of its PCT
+# file; see CLUT_FILES.
 
 import struct
 import math
@@ -119,9 +111,15 @@ _DESC_SUBPTR      = 10
 _DESC_SWITCH      = 0xD0
 _DESC_BANK_STRIDE = 0x0C
 
-# The descriptor holds two banks of switch points. Bank 0 and bank 1 describe
-# the same partition offset by a few nodes; bank 0 is used because it yields a
-# single contiguous arc on every course.
+# The descriptor holds two banks of switch points. The game picks between them
+# with the flag that also selects the reverse driving direction, so bank 0 is
+# the normal course and bank 1 is its Extra (reverse) variant.
+#
+# The two banks describe the same partition offset by a few spine nodes, and
+# that offset falls between the nodes any geometry maps to, so both banks
+# produce an identical section assignment on all five courses. The Extra
+# courses therefore extract to exactly the same geometry and textures as the
+# normal ones, and no separate export is needed.
 _DESC_BANK = 0
 
 # Mapping from boundary value to CRS section number. Rows below the boundary
@@ -130,8 +128,12 @@ _DESC_BANK = 0
 _SECTION_AT_HIGH_B = 2
 _SECTION_AT_LOW_B  = 3
 
+# Palette file used by each course. CRS_EASY is the only course with its own
+# *_CT.DAT, and it uses that instead of the *_PCT.DAT: VRAM dumps taken during
+# an EASY race hold the plain BIG*.TMS content in the regions EASY_PCT would
+# overwrite, while dumps from MID and HIGH hold their PCT content there.
 CLUT_FILES = {
-    'CRS_EASY': ['EASY_PCT.DAT', 'EASY_CT.DAT'],
+    'CRS_EASY': ['EASY_CT.DAT'],
     'CRS_MID':  ['MID_PCT.DAT'],
     'CRS_HIGH': ['HIGH_PCT.DAT'],
     'CRS_OLDE': ['OLD_PCT.DAT'],
@@ -386,7 +388,8 @@ def _parse_texture_switch(crs_data, bank=_DESC_BANK):
     return ref1, ref2, direction
 
 
-def compute_section_map(crs_data, road_nodes, named_placements):
+def compute_section_map(crs_data, road_nodes, named_placements,
+                        bank=_DESC_BANK):
     """
     Decide which course texture section, 2 or 3, each geometry node uses.
 
@@ -404,6 +407,10 @@ def compute_section_map(crs_data, road_nodes, named_placements):
 
     Road segments are assigned by matching their tile to the nearest spine
     node, placed objects by matching their centroid to the nearest spine node.
+
+    bank selects which set of switch points to use: 0 for the normal course
+    and 1 for its Extra (reverse) variant. Both give the same result on every
+    course, so the Extra courses need no separate export.
 
     Returns a dict mapping node name to section number.
     """
@@ -427,7 +434,7 @@ def compute_section_map(crs_data, road_nodes, named_placements):
         d4 = struct.unpack_from('<i', crs_data, off + 4)[0]
         spine_world.append((_BASE_X - (d0 >> 14), d4 >> 14))
 
-    ref1, ref2, direction = _parse_texture_switch(crs_data)
+    ref1, ref2, direction = _parse_texture_switch(crs_data, bank)
     wrap = node_count * 256
 
     def _signed_wrap(cam, ref):
@@ -463,7 +470,7 @@ def compute_section_map(crs_data, road_nodes, named_placements):
     boundaries = [_boundary(n) for n in range(node_count)]
     n_hi = sum(1 for b in boundaries if b == 256)
     n_lo = sum(1 for b in boundaries if b == 0)
-    print(f'  texture switch: bank {_DESC_BANK} ref1=node{ref1 // 256} '
+    print(f'  texture switch: bank {bank} ref1=node{ref1 // 256} '
           f'ref2=node{ref2 // 256} dir={direction}  '
           f'({n_hi} nodes B=256, {n_lo} nodes B=0, '
           f'{node_count - n_hi - n_lo} in transition)')
